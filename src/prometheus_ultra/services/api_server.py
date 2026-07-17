@@ -780,6 +780,13 @@ class UltraAPIServer:
                     pass
                 summary["fitness_detail"] = fit_detail
 
+                # ── 机制消费率聚合 (方案Y: 覆盖全 6 类载体) ──
+                try:
+                    cons = o.get_mechanism_consumption()
+                except Exception:
+                    cons = {}
+                summary["mechanism_consumption"] = cons
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:

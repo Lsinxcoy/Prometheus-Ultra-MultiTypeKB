@@ -144,6 +144,7 @@ class SkillRegistry:
             return False
         
         skill["status"] = "active"
+        skill["consumed_at"] = __import__("time").time()  # 方案Y: 技能激活=被宿主消费, 记时间戳供 B1 消费率观测
         return True
     
     def deactivate(self, name: str) -> bool:

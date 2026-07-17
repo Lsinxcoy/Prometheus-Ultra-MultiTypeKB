@@ -36,6 +36,9 @@ class BehaviorEntry:
     signature: str = ""          # 函数签名摘要
     docstring: str = ""          # 文档字符串(行为语义主来源)
     callees: list = field(default_factory=list)  # 调用的本地符号(用于跨模块/分散行为推断)
+    # 方案Y: 使用追踪(被 locate_behavior 查中时记时间戳, 供 B1 消费率观测)
+    last_used: float = 0.0
+    used_count: int = 0
 
 
 @dataclass
@@ -175,6 +178,8 @@ class HarnessHandbook:
             overlap = len(q_tokens & set(self._tokenize(text)))
             if overlap == 0:
                 continue
+            e.last_used = __import__("time").time()  # 方案Y: 被查中记时间戳
+            e.used_count += 1
             scored.append((overlap, e))
         scored.sort(key=lambda x: -x[0])
         cands = []
@@ -255,6 +260,8 @@ class HarnessHandbook:
                 overlap = len(q_tokens & set(self._tokenize(text)))
                 if overlap == 0:
                     continue
+                e.last_used = __import__("time").time()  # 方案Y: 被查中记时间戳
+                e.used_count += 1
                 cands.append(LocationCandidate(
                     module=e.module, filepath=e.filepath, lineno=e.lineno,
                     symbol=e.signature, confidence=min(1.0, overlap / 5.0),

@@ -106,8 +106,9 @@ class SpeculativeEvolution:
         for fork in self._active_forks:
             fork["actual_fitness"] = self._evaluator(fork["context"], fork["variant_genes"])
         best = max(self._active_forks, key=lambda f: f.get("actual_fitness", 0))
-        if best.get("actual_fitness", 0) > best["parent_fitness"]:
+        if best.get("actual_fitness", 0) > best.get("parent_fitness"):
             best["status"] = "promoted"
+            best["consumed_at"] = __import__("time").time()  # 方案Y: fork 被 promote=激活, 记时间戳供 B1 消费率
             self._promotions += 1
             return best
         else:

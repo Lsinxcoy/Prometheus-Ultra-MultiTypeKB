@@ -4345,7 +4345,88 @@ class Omega:
             details=details,
         )
 
-    def _compute_fitness(self) -> float:
+    def get_mechanism_consumption(self) -> dict:
+        """方案Y: 聚合全 6 类机制载体的消费/激活状态。
+
+        解决架构债: 机制散布在 6 类各自为政的载体里, B1 消费率原只看
+        mechanism_registry (1/6)。本聚合器统一读:
+        - mechanism_registry: consumed_at (D1 回流)
+        - skill_registry: consumed_at (activate 时记)
+        - evolution gene_specs (Speculative): consumed_at (promote 时记)
+        - handbook.entries: used_count>0 (被 locate_behavior 查中)
+        - instincts: _trigger_counts>0 (安全本能命中)
+        - harness_x primitives: last_used (get_best_config 选中)
+        返回 {total, consumed, rate, by_carrier}
+        """
+        try:
+            import time as _t
+            snap = {"total": 0, "consumed": 0, "by_carrier": {}}
+
+            # 1. mechanism_registry
+            reg = getattr(self, "mechanism_registry", None)
+            mechs = getattr(reg, "_mechanisms", {}) or {}
+            c1 = sum(1 for m in mechs.values()
+                      if isinstance(m, dict) and (m.get("consumed_at") is not None
+                                                      or m.get("emit_accepted") is True))
+            snap["total"] += len(mechs)
+            snap["consumed"] += c1
+            snap["by_carrier"]["mechanism_registry"] = {"total": len(mechs), "consumed": c1}
+
+            # 2. skill_registry
+            sk = getattr(self, "skill_registry", None)
+            skills = getattr(sk, "_skill_map", {}) or {} if sk else {}
+            c2 = sum(1 for s in skills.values()
+                      if isinstance(s, dict) and s.get("consumed_at") is not None)
+            snap["total"] += len(skills)
+            snap["consumed"] += c2
+            snap["by_carrier"]["skill_registry"] = {"total": len(skills), "consumed": c2}
+
+            # 3. evolution gene_specs (Speculative)
+            ev = getattr(self, "evolution_engine", None)
+            genes = getattr(ev, "_gene_specs", {}) or {} if ev else {}
+            c3 = sum(1 for g in genes.values()
+                      if isinstance(g, dict) and g.get("consumed_at") is not None)
+            snap["total"] += len(genes)
+            snap["consumed"] += c3
+            snap["by_carrier"]["speculative_genes"] = {"total": len(genes), "consumed": c3}
+
+            # 4. handbook entries (被查中)
+            try:
+                from prometheus_ultra.mechanisms.handbook import get_handbook
+                hb = get_handbook()  # 惰性单例(日志"Handbook built: 3170")
+            except Exception:
+                hb = None
+            entries = getattr(hb, "entries", []) or []
+            c4 = sum(1 for e in entries
+                      if getattr(e, "used_count", 0) > 0)
+            snap["total"] += len(entries)
+            snap["consumed"] += c4
+            snap["by_carrier"]["handbook"] = {"total": len(entries), "consumed": c4}
+
+            # 5. instincts (安全本能命中)
+            ins = getattr(self, "instincts", None)
+            trig = getattr(ins, "_trigger_counts", {}) or {} if ins else {}
+            c5 = sum(1 for v in trig.values() if v and v > 0)
+            snap["total"] += len(trig)
+            snap["consumed"] += c5
+            snap["by_carrier"]["instincts"] = {"total": len(trig), "consumed": c5}
+
+            # 6. harness primitives (被选中)
+            hx = getattr(self, "harness_x", None)
+            prims = getattr(hx, "_primitives", {}) or {} if hx else {}
+            c6 = sum(1 for p in prims.values()
+                      if hasattr(p, "last_used") and getattr(p, "last_used", 0) > 0)
+            snap["total"] += len(prims)
+            snap["consumed"] += c6
+            snap["by_carrier"]["harness_x"] = {"total": len(prims), "consumed": c6}
+
+            snap["rate"] = round(snap["consumed"] / max(1, snap["total"]), 4)
+            return snap
+        except Exception as e:
+            logger.debug("get_mechanism_consumption failed: %s", e)
+            return {"total": 0, "consumed": 0, "rate": 0.0, "by_carrier": {}}
+
+    def _compute_fitness(self):
         """Compute system fitness based on multiple quality dimensions."""
         # Dimension 1: Memory richness (0-0.3)
         node_count = self.store.get_node_count()
@@ -4395,15 +4476,12 @@ class Omega:
         except Exception:
             multitype_score = 0.0
 
-        # Dimension 9: 机制消费率 (0-0.1)
+        # Dimension 9: 机制消费率 (0-0.1) — 方案Y: 覆盖全 6 类机制载体
         try:
-            reg = self.mechanism_registry
-            all_mech = getattr(reg, "_mechanisms", {}) or {}
-            consumed = sum(1 for m in all_mech.values()
-                           if isinstance(m, dict) and (m.get("consumed_at") is not None
-                           or m.get("emit_accepted") is True))
-            total_mech = max(1, len(all_mech))
-            consumption_score = min(0.1, consumed / total_mech * 0.1)
+            snap = self.get_mechanism_consumption()
+            total_all = max(1, snap["total"])
+            consumed_all = snap["consumed"]
+            consumption_score = min(0.1, consumed_all / total_all * 0.1)
         except Exception:
             consumption_score = 0.0
 
