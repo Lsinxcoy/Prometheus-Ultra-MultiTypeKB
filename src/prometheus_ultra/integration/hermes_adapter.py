@@ -24,10 +24,12 @@ class HermesAdapter(HostAgentAdapter):
     """Hermes 宿主适配器. Ultra 通过它调用 Hermes 的 LLM 并把机制回流给 Hermes."""
 
     def __init__(self, endpoint: str | None = None, api_key: str | None = None,
-                 model: str | None = None, timeout: float = 60.0, host_id: str = "hermes"):
+                 model: str | None = None, timeout: float = 60.0, host_id: str = "hermes",
+                 provider: str = "auto"):
         # env 泛化: AGENT_LLM_ENDPOINT 优先, HERMES_LLM_ENDPOINT 兼容别名
         ep = endpoint or os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
-        self._bridge = LLMBridge(endpoint=ep, api_key=api_key, model=model, timeout=timeout)
+        self._bridge = LLMBridge(endpoint=ep, api_key=api_key, model=model, timeout=timeout,
+                                 provider=provider)
         # Hermes 专用 emit 端点(可选): 把 capability 推给 Hermes
         self._emit_endpoint = os.environ.get("AGENT_CAPABILITY_ENDPOINT") or os.environ.get("HERMES_CAPABILITY_ENDPOINT")
         self.host_id = host_id  # [P2 C5] 多宿主隔离标识

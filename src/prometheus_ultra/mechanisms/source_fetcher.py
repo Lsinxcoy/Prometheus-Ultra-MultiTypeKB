@@ -12,6 +12,7 @@ import re
 import urllib.parse
 import zipfile
 import io
+import httpx  # 模块级导入, 便于测试 monkeypatch
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +35,36 @@ def fetch_arxiv_fulltext(arxiv_id: str, max_chars: int = 20000) -> str:
         aid = aid.split("/abs/")[-1]
     url = f"https://arxiv.org/e-print/{aid}"
     try:
-        import httpx
         resp = httpx.get(url, timeout=60.0, follow_redirects=True)
         resp.raise_for_status()
-        z = zipfile.ZipFile(io.BytesIO(resp.content))
+        # arXiv e-print 返回 .tar.gz (tar 压缩包), 非 zip.
+        # V3.7c 修复: 之前用 zipfile 解 tar.gz 报错 'File is not a zip file' (被 mock 掩盖,
+        #   真拉 arxiv 才暴露). 改用 tarfile 解压读 .tex.
         tex_texts = []
-        for name in z.namelist():
-            if name.endswith(".tex"):
-                try:
-                    tex_texts.append(z.read(name).decode("utf-8", errors="ignore"))
-                except Exception:
-                    pass
+        content = resp.content
+        # 先试 tar.gz (arxiv e-print 真实格式)
+        try:
+            import tarfile
+            with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+                for m in tar.getmembers():
+                    if m.name.endswith(".tex") and m.isfile():
+                        try:
+                            tex_texts.append(tar.extractfile(m).read().decode("utf-8", errors="ignore"))
+                        except Exception:
+                            pass
+        except Exception:
+            # 兜底: 试 zip (以防个别端点返回 zip)
+            try:
+                with zipfile.ZipFile(io.BytesIO(content)) as z:
+                    for name in z.namelist():
+                        if name.endswith(".tex"):
+                            try:
+                                tex_texts.append(z.read(name).decode("utf-8", errors="ignore"))
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.debug("SourceFetcher arxiv fulltext failed: %s", e)
+                return ""
         full = "\n".join(tex_texts)
         # 去注释/命令噪声(轻量)
         full = re.sub(r"%.*", "", full)

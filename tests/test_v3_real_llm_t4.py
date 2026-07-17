@@ -120,11 +120,16 @@ class TestRealLLMT4Compile:
             except Exception: pass
             mc_mod.fetch_arxiv_fulltext = orig_fetch
 
-    def test_t4_falls_back_to_placeholder_without_llm(self):
+    def test_t4_falls_back_to_placeholder_without_llm(self, monkeypatch):
         """无 Agent LLM 时, T4 降级占位(诚实: 明确标记 await 实现, 非伪装成功)."""
         from prometheus_ultra.life import Omega
         from prometheus_ultra.mechanisms import mechanism_compiler as mc_mod
+        from prometheus_ultra.integration.llm_config import LLMConfig
 
+        # V3.7: 无 env 时 from_hermes() 会自动读 ~/.hermes/config.yaml 的 model 段.
+        #   本测试模拟"无 LLM 配置"环境 -> mock from_hermes 返回 None
+        #   (否则 CI/本机有 config.yaml 真实 key 时, o.llm.available 会为 True, 断言失效).
+        monkeypatch.setattr(LLMConfig, "from_hermes", classmethod(lambda cls: None))
         old = dict(os.environ)
         db = os.path.join(tempfile.gettempdir(), f"ultra_t4b_{os.getpid()}_{id(object())}.db")
         o = None

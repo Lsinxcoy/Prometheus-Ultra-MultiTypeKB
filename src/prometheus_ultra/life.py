@@ -662,7 +662,7 @@ class Omega:
             _llm_cfg = LLMConfig.from_hermes()  # 自动: env > hermes config.yaml > 探测端口
             if _llm_cfg is not None:
                 self.host = HermesAdapter(endpoint=_llm_cfg.endpoint, api_key=_llm_cfg.api_key,
-                                            model=_llm_cfg.model)
+                                            model=_llm_cfg.model, provider=_llm_cfg.provider)
                 self.llm = self.host._bridge
             else:
                 # 无 LLM 配置: 仍 Hermes 宿主身份, self.llm 建空 bridge(available=False)
