@@ -607,8 +607,14 @@ class Evaluator:
                 chromo.fitness = Evaluator._heuristic_fitness(genes)
 
     @staticmethod
-    def _heuristic_fitness(genes: List[Gene]) -> float:
-        """Heuristic fitness: weighted sum of normalized values."""
+    def _heuristic_fitness(genes: List[Gene], utility_anchor: float = 0.5) -> float:
+        """Heuristic fitness: weighted sum of normalized values, 融合真实效用锚 [D3].
+
+        D3 修复(自指漂移): 原 heuristic 只量"基因值在合法区间的居中度" -> 参数自指,
+        系统可能收敛到"参数看起来优但对宿主无价值"的局部. 现融合 utility_anchor:
+        - utility_anchor 来自系统真实效用信号(utility_tracker 命中/访问, 或宿主回 confirm)
+        - 无锚时默认 0.5(中性, 退化为原居中启发式, 向后兼容)
+        """
         if not genes:
             return 0.0
         score = 0.0
@@ -622,7 +628,9 @@ class Evaluator:
             gene_score = math.exp(-2.0 * (normalized - 0.5) ** 2)
             score += gene_score * gene.weight
             total_weight += gene.weight
-        return score / max(total_weight, 1e-10)
+        base = score / max(total_weight, 1e-10)
+        # 融合效用锚: 真实效用高 -> fitness 上抬, 低 -> 下压(不再纯自指)
+        return base * 0.6 + utility_anchor * 0.4
 
 
 # === Main Evolution Engine ===
@@ -670,6 +678,8 @@ class EvolutionEngine:
         self._crossover_rate = crossover_rate
         self._tournament_size = tournament_size
         self._evaluate_fn = evaluate_fn
+        # D3: 真实效用锚 — 融合进 fitness, 防止参数自指漂移. 由 Omega 注入(utility_tracker 信号)
+        self._utility_anchor = 0.5
 
         # Layer instances
         self._controller = Controller(mutation_rate, mutation_strength)
@@ -709,6 +719,12 @@ class EvolutionEngine:
             logger.info("EvolutionEngine: injected %d gene specs from T3 (total=%d)", added, len(self._gene_specs))
         return added
 
+    def set_utility_anchor(self, anchor: float) -> None:
+        """D3: 设置真实效用锚(0..1). Omega 注入 utility_tracker 真实信号.
+        无宿主回 confirm 时, 用系统内部真实使用度(命中/访问)作为外部锚, 防自指漂移.
+        """
+        self._utility_anchor = max(0.0, min(1.0, float(anchor)))
+
     def evolve(self, context: str = "", evaluate_fn: Optional[Callable] = None,
                gene_specs: Optional[Dict[str, Tuple[float, float]]] = None,
                max_generations: Optional[int] = None) -> Dict[str, Any]:
@@ -725,8 +741,19 @@ class EvolutionEngine:
         """
         specs = gene_specs or self._gene_specs or self._default_gene_specs()
         eval_fn = evaluate_fn or self._evaluate_fn
+        # D3: 无外部 eval_fn 时, 用融合效用锚的启发式(防止纯参数自指)
+        # utility_anchor 来自 Omega 注入的真实效用信号(utility_tracker / 宿主回 confirm)
+        if eval_fn is None:
+            anchor = self._utility_anchor
+            def eval_fn(ctx, params):  # noqa: E306
+                # 构造伪基因列表以复用 _heuristic_fitness(仅用到值/边界/权重)
+                from prometheus_ultra.evolution.evolution_engine import Gene
+                genes = [Gene(gene_id=n, name=n, value=v,
+                              min_val=specs.get(n, (0, 1))[0],
+                              max_val=specs.get(n, (0, 1))[1]) for n, v in params.items()]
+                return Evaluator._heuristic_fitness(genes, utility_anchor=anchor)
 
-        # Initialize population
+        # Initialize population (仅首次/种群为空时)
         if not self._population:
             self._population = self._initialize_population(specs)
 

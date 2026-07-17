@@ -2448,6 +2448,14 @@ class Omega:
             derived_context = context
 
         result = self.eval_engine.evolve(evo_ctx)
+        # D3: 注入真实效用锚 — 用 utility_tracker 的真实使用度信号, 防 fitness 纯参数自指
+        if self.utility_tracker is not None:
+            try:
+                avgs = self.utility_tracker.get_all_averages()  # node_id -> 真实效用
+                anchor = sum(avgs.values()) / len(avgs) if avgs else 0.5
+                self.evolution_engine.set_utility_anchor(anchor)
+            except Exception:
+                pass
         self.evolution_engine.evolve(derived_context, gene_specs=derived_specs or None)
         fitness_after = self._compute_fitness()
 

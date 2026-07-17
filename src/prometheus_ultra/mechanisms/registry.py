@@ -169,6 +169,26 @@ class MechanismRegistry:
         entry["last_invoked"] = time.time()
 
         executable = entry.get("data", {}).get("executable")
+        draft_code = entry.get("data", {}).get("draft_code", "")
+        # D2 真能力: active 机制优先经沙箱编译执行 draft_code(真能力生效, 非空壳)
+        if draft_code and entry.get("status") == "active":
+            try:
+                from prometheus_ultra.integration.mechanism_sandbox import MechanismSandbox
+                from prometheus_ultra.mechanisms import base_mechanism
+                sb = MechanismSandbox()
+                result = sb.run(name, draft_code, base_mechanism, context=context)
+                entry["data"]["last_result"] = result
+                if not result.get("ok", False):
+                    entry["error_count"] = entry.get("error_count", 0) + 1
+                    logger.warning("MechanismRegistry: sandbox run %s: %s", name, result.get("note"))
+                    return False
+                entry["last_executed_at"] = time.time()
+                return True
+            except Exception as e:
+                logger.warning("MechanismRegistry: sandbox invoke %s failed: %s", name, e)
+                entry["error_count"] = entry.get("error_count", 0) + 1
+                return False
+        # 降级: 原 executable.run (草案类/无 draft_code 机制)
         if executable is not None:
             try:
                 if isinstance(executable, BaseMechanism):
