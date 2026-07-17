@@ -38,8 +38,13 @@ class MechanismRegistry:
     支持依赖解析和健康检查.
     """
     
-    def __init__(self):
-        """初始化."""
+    def __init__(self, path: str | None = None):
+        """初始化.
+
+        path: 机制持久化文件路径(JSON). 非空则启动时 _load() 恢复机制态
+        (解"机制注册表纯内存、重启全丢"根因 — B1 消费率/D1 回流
+        此前在空 registry 上跑). None 则纯内存(测试/临时).
+        """
         self._mechanisms: dict[str, dict] = {}
         self._enabled: set[str] = set()
         self._history: list[dict] = []
@@ -53,6 +58,46 @@ class MechanismRegistry:
         # 映射到 ULTRA: 同一问题保留多个机制候选的叠加态(各带权重),
         #   运行时按上下文动态选最相关的(而非固定激活一个). 这是 P6 A-B 并行的升级.
         self._superposed: dict[str, dict] = {}  # super_name -> {candidates: [{name, weight, draft_code, ...}]}
+        # 持久化路径
+        self._path = path
+        if path:
+            try:
+                self._load()
+            except Exception as e:
+                logger.warning("MechanismRegistry: load from %s failed: %s", path, e)
+
+    # ── 持久化 (方案A: JSON 文件, 契合 archive/ 本地产出物哲学) ──
+    def _load(self) -> None:
+        """从 JSON 恢复 _mechanisms / _enabled. 失败静默(纯内存启动)."""
+        import json
+        import os
+        if not self._path or not os.path.exists(self._path):
+            return
+        with open(self._path, "r", encoding="utf-8") as f:
+            blob = json.load(f)
+        self._mechanisms = {k: dict(v) for k, v in blob.get("mechanisms", {}).items()}
+        self._enabled = set(blob.get("enabled", []))
+        # _history / _superposed 不持久(运行期临时态)
+
+    def _persist(self) -> None:
+        """序列化 _mechanisms / _enabled 到 JSON. 失败静默(不阻断主流程)."""
+        if not self._path:
+            return
+        import json
+        import os
+        import threading
+        try:
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            blob = {
+                "mechanisms": self._mechanisms,
+                "enabled": sorted(self._enabled),
+            }
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(blob, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self._path)  # 原子替换, 避免半写
+        except Exception as e:
+            logger.debug("MechanismRegistry._persist failed: %s", e)
     
     def register(self, name: str, data: dict | None = None,
                  dependencies: list[str] | None = None,
@@ -99,6 +144,7 @@ class MechanismRegistry:
         self._mechanisms[name] = entry
         if not pending:
             self._enabled.add(name)
+        self._persist()
         self._history.append({"action": "register", "name": name, "deps": deps, "pending": pending})
 
         return {
@@ -123,6 +169,7 @@ class MechanismRegistry:
         
         self._mechanisms[name]["status"] = "enabled"
         self._enabled.add(name)
+        self._persist()
         self._history.append({"action": "enable", "name": name})
         return True
     
@@ -136,6 +183,7 @@ class MechanismRegistry:
             return False
         self._mechanisms[name]["status"] = "disabled"
         self._enabled.discard(name)
+        self._persist()
         self._history.append({"action": "deactivate", "name": name, "reason": "circuit_break"})
         return True
 
@@ -153,6 +201,7 @@ class MechanismRegistry:
         
         self._mechanisms[name]["status"] = "disabled"
         self._enabled.discard(name)
+        self._persist()
         self._history.append({"action": "disable", "name": name})
         return True
     

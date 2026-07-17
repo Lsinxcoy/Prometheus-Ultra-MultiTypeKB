@@ -559,7 +559,7 @@ class Omega:
         self.skill_claw = SkillClaw()
 
         # ===== Mechanisms (3) =====
-        self.mechanism_registry = MechanismRegistry()
+        self.mechanism_registry = MechanismRegistry(path="archive/mechanisms.json")
         self.x_adapter = XMemoryAdapter()
         self.y_adapter = YBankAdapter()
 

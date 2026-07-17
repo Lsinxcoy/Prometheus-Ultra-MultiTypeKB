@@ -45,6 +45,11 @@ class HostAgentAdapter(abc.ABC):
             entry = mechs.get(name)
             if isinstance(entry, dict):
                 entry["consumed_at"] = __import__("time").time()
+                # 持久化消费标记 (解 registry 纯内存、重启丢根因)
+                try:
+                    reg._persist()
+                except Exception:
+                    pass
         except Exception as e:
             logger.debug("HostAgentAdapter._mark_consumed(%s) failed: %s", name, e)
 
