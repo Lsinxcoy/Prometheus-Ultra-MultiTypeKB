@@ -48,3 +48,61 @@ def test_compute_fitness_includes_new_dimensions():
     # 三维各自封顶 0.1
     for k in ("multitype", "consumption", "rumination"):
         assert 0.0 <= detail[k] <= 0.1, f"{k}={detail[k]} 超范围"
+
+
+def test_read_entries_surfaces_malformed_inbox_line(caplog, tmp_path):
+    """cycle3: inbox 中腐蚀 JSON 行不再静默丢失, 而是告警(此前 except:pass 无声吞掉)。"""
+    import json
+    import logging
+
+    from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+
+    inbox_path = tmp_path / "inbox.jsonl"
+    with open(inbox_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"event": "received", "name": "good_mech"}) + "\n")
+        f.write("{ 这一行是损坏的 JSON \n")  # 非法 JSON
+
+    caplog.set_level(logging.WARNING,
+                     logger="prometheus_ultra.integration.capability_inbox")
+    inbox = CapabilityInbox(path=str(inbox_path))
+
+    entries = inbox._read_entries()
+    # 合法行仍正常解析
+    assert len(entries) == 1
+    assert entries[0]["name"] == "good_mech"
+    # 损坏行触发告警 —— 证明不再静默吞掉(修复前此处零日志)
+    assert any("损坏的 inbox 行" in r.message for r in caplog.records), \
+        "腐蚀 inbox 行应触发告警, 但无任何日志(静默丢失未修复)"
+
+
+def test_load_applied_surfaces_malformed_record(caplog, tmp_path):
+    """cycle3: 腐蚀的 applied 记录不再静默跳过, 而是告警(防 pending() 重复报已应用机制)。"""
+    import json
+    import logging
+    import os
+
+    from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+
+    inbox_path = tmp_path / "inbox.jsonl"
+    inbox_path.write_text("", encoding="utf-8")
+    inbox = CapabilityInbox(path=str(inbox_path))  # 启动时 applied/ 不存在, 安全
+
+    applied_dir = os.path.join(os.path.dirname(str(inbox_path)), "applied")
+    os.makedirs(applied_dir, exist_ok=True)
+    # 腐蚀的 applied 记录
+    with open(os.path.join(applied_dir, "bad.applied.json"), "w", encoding="utf-8") as f:
+        f.write("{ corrupted json")
+    # 合法 applied 记录
+    good = {"name": "good_mech", "host_id": "default", "applied_at": 1.0}
+    with open(os.path.join(applied_dir, "good_mech.applied.json"), "w", encoding="utf-8") as f:
+        json.dump(good, f)
+
+    caplog.set_level(logging.WARNING,
+                     logger="prometheus_ultra.integration.capability_inbox")
+    inbox._load_applied()
+
+    # 合法记录仍加载
+    assert "good_mech" in inbox._applied
+    # 腐蚀记录触发告警且不崩(修复前 except:pass 无声吞掉 -> 重启后 pending 重报机制)
+    assert any("损坏的 applied 记录" in r.message for r in caplog.records), \
+        "腐蚀 applied 记录应触发告警, 但无任何日志(静默丢失未修复)"

@@ -118,8 +118,11 @@ class CapabilityInbox:
                     continue
                 try:
                     out.append(json.loads(line))
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 不静默丢: 腐蚀的 inbox 行会让对应机制永不 apply / 被 pending 无限重报.
+                    # 显式告警, 让运维/监控看到数据丢失, 而非无声吞掉.
+                    logger.warning("CapabilityInbox: 跳过损坏的 inbox 行 (已丢该机制): %s | 行=%r",
+                                   e, line[:200])
         return out
 
     def _load_applied(self) -> None:
@@ -132,5 +135,7 @@ class CapabilityInbox:
                     with open(os.path.join(out_dir, fn), encoding="utf-8") as f:
                         p = json.load(f)
                     self._applied[p["name"]] = p
-                except Exception:
-                    pass
+                except Exception as e:
+                    # 不静默丢: 腐蚀的 applied 记录会让 _load_applied 失败 -> pending() 把
+                    # 已应用机制重新报为 pending -> 宿主重复 apply (能力漂移). 显式告警.
+                    logger.warning("CapabilityInbox: 跳过损坏的 applied 记录 %s: %s", fn, e)
