@@ -14,15 +14,18 @@
 任意宿主只需实现一个 Adapter, 即可即插即用 — Ultra 内核不感知具体宿主.
 """
 from __future__ import annotations
-
 import abc
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class HostAgentAdapter(abc.ABC):
     """宿主 agent 抽象接口. 所有具体宿主(Hermes/Claude Code/AutoGPT/自研)实现此接口."""
+
+    # 多宿主隔离标识 [P2 C5]: 同一 Ultra 服务多个 agent 时, 经验/机制按 host_id 分区
+    host_id: str = "default"
 
     @abc.abstractmethod
     def llm_complete(self, prompt: str, system: str = "") -> str | None:
@@ -55,6 +58,22 @@ class HostAgentAdapter(abc.ABC):
         Ultra 的 learn() 会消费它, 经 rumination 路由到 T2/T4 燃料 (复用 rail_t1~t4).
         """
 
+    @abc.abstractmethod
+    def pull_experience(self, limit: int = 10) -> list[dict]:
+        """拉取宿主运行时经验(供 Ultra learn 消费). 与 ingest 反向: Ultra 主动拉.
+
+        返回事件列表: [{type, content, utility, timestamp}, ...]
+        宿主可把经验写到本地文件/队列, 此方法读取. 无经验返回空 list(不崩).
+        """
+
+    @abc.abstractmethod
+    def apply_capability(self, name: str, host_id: str = "default") -> bool:
+        """宿主侧应用 Ultra 推送的机制(生成可执行的机制描述, 供宿主生成 tool/prompt).
+
+        返回 True 表示机制已落地(能真正增强宿主能力), 而非仅日志.
+        这是"建议+宿主确认"语义的终点: Ultra emit -> 宿主 apply -> 能力生效.
+        """
+
 
 class NullHostAdapter(HostAgentAdapter):
     """空宿主适配器: 无宿主时(如独立运行/测试)的安全降级.
@@ -62,6 +81,7 @@ class NullHostAdapter(HostAgentAdapter):
     所有方法 no-op 或返回空 — 保证 Ultra 在无宿主环境下仍能自进化
     (机制注册进 registry 但不回流宿主, 不退化为崩溃).
     """
+    host_id = "none"
 
     def llm_complete(self, prompt: str, system: str = "") -> str | None:
         return None
@@ -70,8 +90,24 @@ class NullHostAdapter(HostAgentAdapter):
         return {"tools": [], "context_window": 0, "current_task": "", "host": "none"}
 
     def emit_capability(self, spec: dict) -> bool:
-        logger.debug("NullHostAdapter: emit_capability no-op (no host): %s", spec.get("name"))
-        return False
+        logger.debug("NullHostAdapter: emit_capability -> inbox (no live host): %s", spec.get("name"))
+        # P0 C1: 无宿主时也落 inbox, 机制不丢(只是无宿主实时接收)
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            return CapabilityInbox().receive(spec).accepted
+        except Exception:
+            return False
 
     def ingest_experience(self, log: dict) -> None:
         logger.debug("NullHostAdapter: ingest_experience no-op (no host)")
+
+    def pull_experience(self, limit: int = 10) -> list[dict]:
+        return []  # 无宿主时无经验
+
+    def apply_capability(self, name: str, host_id: str = "default") -> bool:
+        # 无宿主时仍生成 applied 描述文件(机制落地为产物, 待宿主接入时可用)
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            return CapabilityInbox().apply_capability(name, host_id=host_id).applied
+        except Exception:
+            return False

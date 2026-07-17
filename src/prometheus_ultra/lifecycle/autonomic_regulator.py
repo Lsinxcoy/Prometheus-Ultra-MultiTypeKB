@@ -243,15 +243,13 @@ class AutonomicRegulator:
             logger.warning("AutonomicRegulator._trigger_downgrade: %s", e)
 
     def _circuit_break_active_mechanisms(self) -> int:
-        """P0b: 熔断门 — fitness 连续下降时回滚最近激活的外部机制.
+        """P0b/P1 C3: 熔断门 — fitness 连续下降时精准回滚有害外部机制.
 
-        解 B3: 激活机制此前无监管(注册进 _enabled 永久生效, 坏机制拖垮系统也不回滚).
-        这里对当前 _enabled 中"外部进化机制"(compiled/extracted 及 pending 类)调用
-        registry.deactivate, 并记录到反进化门供回归检测. 返回实际回滚数.
-
-        安全边界: 只回滚 T3/T4 外部进化机制, 不碰 T1/T2 内生机制(参数/语义),
-        避免误伤系统基础进化能力. 连续 fitness 下降本身就是坏信号, 外部机制嫌疑最大,
-        故不要求 consume_error(宿主拒绝 emit 也未必抛异常).
+        精准化(修正 V2 矫枉过正): 只回滚确证有害的机制, 不泛化回滚所有 T3/T4:
+        - consume_error: 消费(emit/inject)时抛异常 -> 机制本身有问题
+        - emit_accepted is False: 宿主明确拒绝接收(机制对宿主无价值)
+        - consumed_at is None: 激活后从未被消费(僵尸, 无人接)
+        正常的 T3(注入 gene 后被适应度评估)不在此列, 避免误伤好机制.
         """
         rolled = 0
         try:
@@ -261,14 +259,20 @@ class AutonomicRegulator:
             for name in list(reg.get_enabled()):
                 entry = reg._mechanisms.get(name, {})
                 cat = entry.get("category", "")
-                if cat in ("compiled", "extracted", "compilation_pending", "extraction_pending"):
-                    if reg.deactivate(name):
-                        rolled += 1
-                        logger.warning("AR: circuit-break deactivated %s (fitness decline)", name)
-                        try:
-                            self._omega.anti_evolution.record_score(entry.get("activated_at", 0.0) or 0.0)
-                        except Exception:
-                            pass
+                if cat not in ("compiled", "extracted", "compilation_pending", "extraction_pending"):
+                    continue  # 只处理外部进化机制
+                harmful = (
+                    entry.get("consume_error")
+                    or entry.get("emit_accepted") is False
+                    or entry.get("consumed_at") is None
+                )
+                if harmful and reg.deactivate(name):
+                    rolled += 1
+                    logger.warning("AR: circuit-break deactivated %s (fitness decline, harmful=%s)", name, harmful)
+                    try:
+                        self._omega.anti_evolution.record_score(entry.get("activated_at", 0.0) or 0.0)
+                    except Exception:
+                        pass
         except Exception as e:
             logger.debug("AR: circuit_break failed: %s", e)
         return rolled

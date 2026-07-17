@@ -2192,8 +2192,10 @@ class Omega:
         try:
             ok = self.host.emit_capability(spec)
             logger.info("Omega: T4 %s emitted to host (accepted=%s)", entry["name"], ok)
+            return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
         except Exception as e:
             logger.warning("Omega: T4 consume (emit) failed: %s", e)
+            return False
 
     # ============================================================
     # evolve pipeline (11 stages — Superpowers enhanced)
@@ -3075,42 +3077,39 @@ class Omega:
         return {"source": source, "query": query, "total_results": 0, "new_nodes": 0, "reason": "empty_scan"}
 
     # ============================================================
-    # P1c: 宿主经验回流 — 把宿主 agent 运行时经验接进 Ultra 进化燃料(解 B7)
-    # ============================================================
     def _learn_host_experience(self, query: str = "", max_results: int = 5) -> dict:
         """从宿主 agent 拉取运行时经验(行为日志/失败/反馈), 路由进 store 供 T2/T4 消费.
 
-        经 self.host.ingest_experience 拉取(宿主 adapter 实现), 每条经验转成 store 节点,
-        由 rumination 打 rail 标签(rail_t2 语义 / rail_t4 论文编译)进入对应进化轨.
-        这是"宿主驱动的自进化"关键: 进化燃料来自宿主真实使用, 而非仅外部知识源.
+        经 self.host.pull_experience 真拉取(宿主 adapter 实现协议: 本地经验文件/队列),
+        每条经验转成 store 节点, 由 rumination 打 rail 标签(rail_t2 语义 / rail_t4 论文编译)
+        进入对应进化轨. 这是"宿主驱动的自进化"关键: 进化燃料来自宿主真实使用 [P0 C2].
         """
         if not hasattr(self, "host") or self.host is None:
             return {"source": "host_experience", "query": query, "total_results": 0,
                     "new_nodes": 0, "reason": "no_host_adapter"}
-        log = {"source": "host_experience", "query": query, "limit": max_results}
-        try:
-            self.host.ingest_experience(log)
-        except Exception as e:
-            logger.debug("learn_host_experience: ingest failed: %s", e)
-        ctx = self.host.get_runtime_context() or {}
         new_nodes = 0
         try:
-            task = ctx.get("current_task", "")
-            if task:
+            events = self.host.pull_experience(limit=max_results)
+            for ev in events:
+                content = ev.get("content") or ev.get("task") or ""
+                if not content:
+                    continue
+                utility = float(ev.get("utility", 0.55))
                 node = self.remember(
-                    content=f"[host_experience] {task}",
-                    utility=0.55,
+                    content=f"[host_experience] {content}",
+                    utility=utility,
                     tags=["host_experience", "rail_t2", "rail_t4"],
-                    node_type="PROCEDURE",
+                    node_type=NodeType.PROCEDURE,
+                    branch=self.host.host_id,  # [P2 C5] 多宿主隔离: 经验按 host_id 分区
                 )
                 if node:
                     new_nodes += 1
         except Exception as e:
-            logger.debug("learn_host_experience: remember failed: %s", e)
+            logger.debug("learn_host_experience: pull failed: %s", e)
         return {
             "source": "host_experience", "query": query,
             "total_results": new_nodes, "new_nodes": new_nodes,
-            "host": ctx.get("host", "none"),
+            "host": (self.host.get_runtime_context() or {}).get("host", "none"),
         }
 
     # ============================================================

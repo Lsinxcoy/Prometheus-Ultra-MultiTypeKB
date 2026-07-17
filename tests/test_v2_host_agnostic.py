@@ -18,18 +18,24 @@ from prometheus_ultra.integration.host_agent import HostAgentAdapter, NullHostAd
 
 class FakeHost(HostAgentAdapter):
     """测试用宿主: 记录 emit_capability 调用."""
-    def __init__(self):
+    def __init__(self, emit_accept=True):
         self.emitted = []
         self.ingested = []
+        self.pulled = []
+        self._emit_accept = emit_accept
     def llm_complete(self, prompt, system=""):
         return None
     def get_runtime_context(self):
         return {"tools": ["x"], "context_window": 100, "current_task": "test_task", "host": "fake"}
     def emit_capability(self, spec):
         self.emitted.append(spec)
-        return True
+        return self._emit_accept
     def ingest_experience(self, log):
         self.ingested.append(log)
+    def pull_experience(self, limit=10):
+        return self.pulled
+    def apply_capability(self, name, host_id="fake"):
+        return True
 
 
 @pytest.fixture
@@ -99,8 +105,12 @@ class TestP0aT3Inject:
 
 class TestP0bCircuitBreak:
     def test_bad_mechanism_deactivated_on_decline(self, omega, monkeypatch):
-        """熔断门: 坏机制激活后 fitness 连续下降 -> deactivate(解 B3)."""
-        # 注册并激活一个 T4 机制(无消费记录 -> 熔断条件满足)
+        """熔断门(C3 精准化): 坏机制(emit 被宿主拒绝)激活后 fitness 下降 -> 回滚."""
+        # 用拒绝 emit 的 host -> bad_mech 激活后 emit_accepted=False -> harmful
+        host = FakeHost()
+        host._emit_accept = False
+        monkeypatch.setattr(omega, "host", host)
+        omega.mechanism_registry.register_consumer("compiled", lambda e: omega._consume_t4(e))
         omega.mechanism_registry.register(
             "bad_mech", data={"draft_code": "x"}, category="compiled", pending=True,
         )
@@ -118,20 +128,21 @@ class TestP0bCircuitBreak:
         for f in [0.9, 0.7, 0.5, 0.4]:
             ar._fitness_log.append((f, 0.0, "evolve"))
         ar._on_evolve({"data": {"fitness_before": 0.4, "fitness_after": 0.3, "strategy": "x"}})
-        # 熔断应已回滚 bad_mech
+        # 熔断应已回滚 bad_mech(emit 被拒 -> harmful)
         assert "bad_mech" not in omega.mechanism_registry.get_enabled(), "坏机制应被熔断回滚"
 
 
 class TestP1cHostExperience:
     def test_learn_host_experience_routes_to_host(self, omega, monkeypatch):
-        """learn(source=host_experience) 走 host adapter (解 B7)."""
+        """learn(source=host_experience) 真拉取宿主经验写 store (解 B7/C2)."""
         host = FakeHost()
+        host.pulled = [{"content": "host observed failure on task X", "utility": 0.7}]
         monkeypatch.setattr(omega, "host", host)
         result = omega.learn(source="host_experience", query="test")
         assert result["source"] == "host_experience"
         assert result["host"] == "fake"
-        # 宿主经验应写入 store (rail_t2/rail_t4 节点)
-        assert host.ingested, "learn(host_experience) 应调用 host.ingest_experience"
+        # 宿主经验应真写入 store (rail_t2/rail_t4 节点)
+        assert result["new_nodes"] >= 1, "learn(host_experience) 应拉取宿主经验写 store"
 
 
 class TestP2aNoLLMDraft:

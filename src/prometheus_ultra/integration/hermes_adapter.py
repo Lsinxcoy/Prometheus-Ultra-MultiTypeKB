@@ -24,12 +24,13 @@ class HermesAdapter(HostAgentAdapter):
     """Hermes 宿主适配器. Ultra 通过它调用 Hermes 的 LLM 并把机制回流给 Hermes."""
 
     def __init__(self, endpoint: str | None = None, api_key: str | None = None,
-                 model: str | None = None, timeout: float = 60.0):
+                 model: str | None = None, timeout: float = 60.0, host_id: str = "hermes"):
         # env 泛化: AGENT_LLM_ENDPOINT 优先, HERMES_LLM_ENDPOINT 兼容别名
         ep = endpoint or os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
         self._bridge = LLMBridge(endpoint=ep, api_key=api_key, model=model, timeout=timeout)
         # Hermes 专用 emit 端点(可选): 把 capability 推给 Hermes
         self._emit_endpoint = os.environ.get("AGENT_CAPABILITY_ENDPOINT") or os.environ.get("HERMES_CAPABILITY_ENDPOINT")
+        self.host_id = host_id  # [P2 C5] 多宿主隔离标识
 
     def llm_complete(self, prompt: str, system: str = "") -> str | None:
         return self._bridge.complete(prompt, system=system)
@@ -44,8 +45,9 @@ class HermesAdapter(HostAgentAdapter):
     def emit_capability(self, spec: dict) -> bool:
         """把 Ultra 进化机制导出给 Hermes.
 
-        优先 HTTP POST 到 AGENT_CAPABILITY_ENDPOINT (Hermes 侧接收并生成 tool/prompt);
-        无端点时降级为本地记录(机制已存 registry + store, 不丢).
+        优先级:
+        1. 有 AGENT_CAPABILITY_ENDPOINT -> HTTP POST(宿主实时接收)
+        2. 无端点 -> 落本地 CapabilityInbox(宿主轮询/应用, 机制不丢) [P0 C1]
         """
         name = spec.get("name", "?")
         if self._emit_endpoint:
@@ -57,9 +59,54 @@ class HermesAdapter(HostAgentAdapter):
                 return ok
             except Exception as e:
                 logger.debug("HermesAdapter: emit HTTP failed: %s", e)
-        logger.info("HermesAdapter: emit %s recorded locally (no capability endpoint)", name)
-        return False
-
+        # 降级: 落本地 inbox(机制真接收, 不再射入虚空)
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            inbox = CapabilityInbox()
+            receipt = inbox.receive(spec)
+            return receipt.accepted
+        except Exception as e:
+            logger.warning("HermesAdapter: emit fallback to inbox failed: %s", e)
+            return False
     def ingest_experience(self, log: dict) -> None:
         """宿主经验回流. Hermes 侧无标准端点时, 由调用方(learn)直接喂 store, 此处 no-op."""
         logger.debug("HermesAdapter: ingest_experience (Hermes 经 learn(source=host_experience) 直喂 store)")
+
+    def pull_experience(self, limit: int = 10) -> list[dict]:
+        """拉取宿主运行时经验 [P0 C2 真拉取].
+
+        协议: 宿主把经验写到 AGENT_EXPERIENCE_FILE(默认 archive/host_experience.json)
+        每行一个 JSON 事件 {type, content, utility, timestamp}. Ultra learn 读取并路由进燃料.
+        无文件返回空 list(不崩).
+        """
+        import json
+        path = os.environ.get("AGENT_EXPERIENCE_FILE") or "archive/host_experience.json"
+        if not os.path.exists(path):
+            return []
+        out = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except Exception:
+                        pass
+                    if len(out) >= limit:
+                        break
+        except Exception as e:
+            logger.debug("HermesAdapter: pull_experience failed: %s", e)
+        return out
+
+    def apply_capability(self, name: str, host_id: str = "hermes") -> bool:
+        """宿主侧应用机制(生成 applied 描述文件, 供 Hermes 生成 tool/prompt). [P0 C1]"""
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            inbox = CapabilityInbox()
+            r = inbox.apply_capability(name, host_id=host_id)
+            return r.applied
+        except Exception as e:
+            logger.debug("HermesAdapter: apply_capability failed: %s", e)
+            return False

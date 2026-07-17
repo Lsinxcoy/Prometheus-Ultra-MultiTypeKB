@@ -319,8 +319,11 @@ class MechanismRegistry:
             logger.debug("Registry: no consumer for category=%s (mechanism stays registered)", category)
             return
         try:
-            consumer(entry)
+            result = consumer(entry)
             entry["consumed_at"] = __import__("time").time()
+            # consumer 可返回 bool 表示宿主是否接受(emit 成功). 用于熔断精准化 [P1 C3]
+            if isinstance(result, bool):
+                entry["emit_accepted"] = result
             self._history.append({"action": "consume", "name": name, "category": category})
         except Exception as e:
             logger.warning("Registry: consumer for %s failed: %s", name, e)
@@ -329,6 +332,19 @@ class MechanismRegistry:
     def get_enabled(self) -> list[str]:
         """返回当前已启用(含已激活)机制名列表. 公开接口供监控/熔断使用."""
         return list(self._enabled)
+
+    def mark_host_used(self, name: str, effect: float = 0.0) -> None:
+        """P1 C4: 宿主侧反馈机制实际被使用/效果. 用于有效性追踪.
+
+        Ultra emit 机制给宿主后, 宿主若真用且有效, 应回调此方法记录(避免'emit 了但没用'盲区).
+        effect>0 表示有益, <0 表示有害.
+        """
+        if name not in self._mechanisms:
+            return
+        e = self._mechanisms[name]
+        e["host_used_count"] = e.get("host_used_count", 0) + 1
+        e["last_host_effect"] = effect
+        e["last_host_used_at"] = __import__("time").time()
 
     def health_check(self) -> dict:
         """健康检查.
@@ -347,6 +363,14 @@ class MechanismRegistry:
         for name in self._enabled:
             if self._mechanisms[name]["invoke_count"] == 0 and name not in depended_on:
                 issues.append({"type": "unused", "mechanism": name})
+
+        # P1 C4: 僵尸 emit — 激活且 emit 被宿主接受, 但宿主从未 mark_host_used(机制没真被用)
+        for name in self._enabled:
+            e = self._mechanisms[name]
+            if e.get("category") in ("compiled", "extracted") and e.get("emit_accepted") is True:
+                if e.get("host_used_count", 0) == 0:
+                    issues.append({"type": "zombie_emit", "mechanism": name,
+                                    "note": "emitted_to_host_but_never_used"})
         
         # 检查环依赖
         order = self.resolve_dependencies()
