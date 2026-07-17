@@ -52,6 +52,7 @@ class AutonomicRegulator:
             bus.subscribe("dream_completed", self._on_dream, priority=0.3)
             bus.subscribe("remember_completed", self._on_remember, priority=0.2)
             bus.subscribe("rumination_completed", self._on_rumination, priority=0.6)
+            bus.subscribe("capability_consumed", self._on_capability, priority=0.6)
             logger.info("AutonomicRegulator subscribed to 7 event types")
 
     def _on_reflect(self, event: dict) -> None:
@@ -110,6 +111,16 @@ class AutonomicRegulator:
                 self._fitness_log.append((max(0.1, 0.5 + 0.01 * promoted), time.time(), "rumination"))
         except Exception as e:
             logger.warning("AutonomicRegulator._on_rumination: %s", e)
+
+    def _on_capability(self, event: dict) -> None:
+        """机制被宿主消费(emit/apply) → 正 fitness 信号；被拒 → 负信号。"""
+        try:
+            d = event.get("data", {})
+            accepted = d.get("accepted", False)
+            fit = 0.5 + (0.05 if accepted else -0.05)
+            self._fitness_log.append((max(0.05, fit), time.time(), "capability"))
+        except Exception as e:
+            logger.warning("AutonomicRegulator._on_capability: %s", e)
 
     def _on_evolve(self, event: dict) -> None:
         """evolve 完成后——比较 fitness 变化，更新策略奖励。"""

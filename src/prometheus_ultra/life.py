@@ -735,6 +735,11 @@ class Omega:
         self.intervention_controller = InterventionController()
         self.compliance_scorer = ComplianceScorer()
 
+        # D1 [Task5]: 反向持有 — 让宿主 adapter 能访问 Omega 的 event_bus,
+        #   以便 emit/apply_capability 时回流产出信号 (capability_consumed) 给神经系统
+        if hasattr(self, "host") and self.host is not None:
+            self.host._omega = self
+
         # ===== P0 Extended: Sleeper + Domain Audit + Fuzz Testing =====
         # Initialized later with try-except for graceful degradation
 

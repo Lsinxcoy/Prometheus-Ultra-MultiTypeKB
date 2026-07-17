@@ -104,3 +104,17 @@ def test_telemetry_evolve_captures_consensus():
     s = tp.query("evolve")
     assert s.signals.get("consensus_rate") is not None
     assert s.signals.get("speculative_flag") is True
+
+def test_adapter_publishes_capability_consumed():
+    from prometheus_ultra.integration.host_agent import GenericAgentAdapter
+    published = []
+    class StubBus:
+        def publish(self, ev): published.append(ev)
+        def subscribe(self, *a, **k): pass
+    class StubOmega:
+        event_bus = StubBus()
+    ad = GenericAgentAdapter(host_id="test", endpoint="http://x")
+    ad._omega = StubOmega()   # 模拟 Omega.__init__ 反向持有
+    ad._emit_endpoint = None  # 走 inbox 分支
+    ok = ad.emit_capability({"name": "m1"})
+    assert any(e.get("type") == "capability_consumed" for e in published), "emit 成功必须 publish"

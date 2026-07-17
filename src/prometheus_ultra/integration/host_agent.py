@@ -94,9 +94,17 @@ class NullHostAdapter(HostAgentAdapter):
     def emit_capability(self, spec: dict) -> bool:
         logger.debug("NullHostAdapter: emit_capability -> inbox (no live host): %s", spec.get("name"))
         # P0 C1: 无宿主时也落 inbox, 机制不丢(只是无宿主实时接收)
+        name = spec.get("name", "?")
         try:
             from prometheus_ultra.integration.capability_inbox import CapabilityInbox
-            return CapabilityInbox().receive(spec).accepted
+            accepted = CapabilityInbox().receive(spec).accepted
+            try:
+                bus = getattr(self, "_omega", None)
+                if bus is not None and hasattr(bus, "event_bus"):
+                    bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": bool(accepted)}})
+            except Exception:
+                pass
+            return accepted
         except Exception:
             return False
 
@@ -110,7 +118,14 @@ class NullHostAdapter(HostAgentAdapter):
         # 无宿主时仍生成 applied 描述文件(机制落地为产物, 待宿主接入时可用)
         try:
             from prometheus_ultra.integration.capability_inbox import CapabilityInbox
-            return CapabilityInbox().apply_capability(name, host_id=host_id).applied
+            applied = CapabilityInbox().apply_capability(name, host_id=host_id).applied
+            try:
+                bus = getattr(self, "_omega", None)
+                if bus is not None and hasattr(bus, "event_bus"):
+                    bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "apply", "accepted": bool(applied)}})
+            except Exception:
+                pass
+            return applied
         except Exception:
             return False
 
@@ -158,12 +173,25 @@ class GenericAgentAdapter(HostAgentAdapter):
                 ok = resp.status_code < 300
                 logger.info("GenericAgentAdapter[%s]: emit %s -> %s", self.host_id, name,
                             "ok" if ok else resp.status_code)
+                try:
+                    bus = getattr(self, "_omega", None)
+                    if bus is not None and hasattr(bus, "event_bus"):
+                        bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": True}})
+                except Exception:
+                    pass
                 return ok
             except Exception as e:
                 logger.debug("GenericAgentAdapter[%s]: emit HTTP failed: %s", self.host_id, e)
         try:
             from prometheus_ultra.integration.capability_inbox import CapabilityInbox
-            return CapabilityInbox().receive(spec).accepted
+            accepted = CapabilityInbox().receive(spec).accepted
+            try:
+                bus = getattr(self, "_omega", None)
+                if bus is not None and hasattr(bus, "event_bus"):
+                    bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": bool(accepted)}})
+            except Exception:
+                pass
+            return accepted
         except Exception as e:
             logger.warning("GenericAgentAdapter[%s]: emit inbox failed: %s", self.host_id, e)
             return False
@@ -199,6 +227,13 @@ class GenericAgentAdapter(HostAgentAdapter):
     def apply_capability(self, name: str, host_id: str = "default") -> bool:
         try:
             from prometheus_ultra.integration.capability_inbox import CapabilityInbox
-            return CapabilityInbox().apply_capability(name, host_id=self.host_id).applied
+            applied = CapabilityInbox().apply_capability(name, host_id=self.host_id).applied
+            try:
+                bus = getattr(self, "_omega", None)
+                if bus is not None and hasattr(bus, "event_bus"):
+                    bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "apply", "accepted": bool(applied)}})
+            except Exception:
+                pass
+            return applied
         except Exception:
             return False
