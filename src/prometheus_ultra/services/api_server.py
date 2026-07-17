@@ -566,6 +566,128 @@ class UltraAPIServer:
             except Exception as e:
                 return {"error": str(e)}
 
+        # ── V3.2 G1: 全机制端点 (Agent 调用 Ultra 所有机制+工具) ──────────
+
+        @app.get("/api/v1/mechanisms", response_model=PipelineResponse)
+        def list_mechanisms():
+            """列出所有机制(含激活态) + 叠加态候选 [P1-b]."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                reg = self.omega.mechanism_registry
+                return PipelineResponse(
+                    success=True, pipeline="mechanisms",
+                    data={
+                        "enabled": reg.get_enabled(),
+                        "stats": reg.get_stats(),
+                        "superposed": reg.get_superposed_names(),
+                    },
+                    duration_ms=0.0,
+                )
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="mechanisms", error=str(e))
+
+        @app.post("/api/v1/mechanisms/invoke", response_model=PipelineResponse)
+        def invoke_mechanism(req: dict):
+            """真执行一个激活机制(D2 沙箱编译 draft_code) [V2.2]."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                name = req.get("name")
+                ctx = req.get("context", {})
+                result = self.omega.mechanism_registry.invoke(name, ctx)
+                # 机制效用反馈(若请求带 effect) [V2.3 P0-a]
+                if "effect" in req:
+                    self.omega.mechanism_registry.record_mechanism_effect(name, float(req["effect"]))
+                return PipelineResponse(success=True, pipeline="invoke", data=result)
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="invoke", error=str(e))
+
+        @app.post("/api/v1/t3/extract", response_model=PipelineResponse)
+        def t3_extract(req: dict):
+            """T3 GitHub 机制提取轨 — 复用 Agent LLM 编译 [V3.0 G2]."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                source = req.get("source", "github")
+                query = req.get("query", "")
+                result = self.omega.mechanism_extractor.extract(source=source, query=query)
+                return PipelineResponse(success=True, pipeline="t3_extract", data=result)
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="t3_extract", error=str(e))
+
+        @app.post("/api/v1/t4/compile", response_model=PipelineResponse)
+        def t4_compile(req: dict):
+            """T4 论文编译轨 — 复用 Agent LLM 编译机制草案 [V3.0 G2]."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                arxiv_id = req.get("arxiv_id", "")
+                title = req.get("title", "")
+                mech = self.omega.mechanism_compiler.compile(arxiv_id, paper_title=title)
+                if mech is None:
+                    return PipelineResponse(success=False, pipeline="t4_compile",
+                                            error="compile returned None (LLM unavailable or parse fail)")
+                return PipelineResponse(
+                    success=True, pipeline="t4_compile",
+                    data={"name": mech.name, "draft_code_len": len(mech.draft_code or ""),
+                          "target_location": str(mech.target_location)},
+                )
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="t4_compile", error=str(e))
+
+        @app.post("/api/v1/ruminate", response_model=PipelineResponse)
+        def ruminate(req: dict):
+            """温故知新 — 跨模态对齐/效用重评估 [V2.4 P1-c]."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                mode = req.get("mode", "full")
+                res = self.omega.rumination_engine.ruminate(mode=mode, force=req.get("force", True))
+                return PipelineResponse(
+                    success=True, pipeline="ruminate",
+                    data={"relearned": res.relearned, "utility_raised": res.utility_raised,
+                          "routed": res.routed_nodes, "deleted": res.deleted_nodes},
+                )
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="ruminate", error=str(e))
+
+        @app.post("/api/v1/evolve/chain", response_model=PipelineResponse)
+        def evolve_chain(req: dict):
+            """进化 + 返回链完整性追踪(V2.3 P0-b chain_trace)."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                out = self.omega.evolve(context=req.get("context", ""))
+                return PipelineResponse(
+                    success=True, pipeline="evolve",
+                    data={
+                        "result": out.result.value if hasattr(out.result, "value") else str(out.result),
+                        "chain_complete": out.metadata.get("chain_complete"),
+                        "chain_trace": out.metadata.get("chain_trace"),
+                        "chain_missing": out.metadata.get("chain_missing_stages"),
+                        "fitness_before": out.fitness_before, "fitness_after": out.fitness_after,
+                    },
+                )
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="evolve", error=str(e))
+
+        @app.get("/api/v1/utility/report", response_model=PipelineResponse)
+        def utility_report():
+            """效用追踪真实信号(D3 锚) — Agent 可据此诊断记忆健康."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                avgs = self.omega.utility_tracker.get_all_averages()
+                return PipelineResponse(
+                    success=True, pipeline="utility",
+                    data={"node_count": len(avgs),
+                          "global_utility": sum(avgs.values()) / len(avgs) if avgs else 0.5,
+                          "samples": dict(list(avgs.items())[:20])},
+                )
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="utility", error=str(e))
+
         @app.on_event("startup")
         def startup():
             if not self.omega:

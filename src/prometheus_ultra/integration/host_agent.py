@@ -20,6 +20,8 @@ import os
 
 logger = logging.getLogger(__name__)
 
+from prometheus_ultra.integration.llm_bridge import LLMBridge
+
 
 class HostAgentAdapter(abc.ABC):
     """宿主 agent 抽象接口. 所有具体宿主(Hermes/Claude Code/AutoGPT/自研)实现此接口."""
@@ -109,5 +111,94 @@ class NullHostAdapter(HostAgentAdapter):
         try:
             from prometheus_ultra.integration.capability_inbox import CapabilityInbox
             return CapabilityInbox().apply_capability(name, host_id=host_id).applied
+        except Exception:
+            return False
+
+
+class GenericAgentAdapter(HostAgentAdapter):
+    """任意 agent 的通用适配器 [V3.1 G3].
+
+    与 HermesAdapter 逻辑相同(复用 LLMBridge + CapabilityInbox + 经验文件协议),
+    但 host_id 由 agent 自报, 不默认 "hermes" — 实现真正多 agent 隔离接入.
+
+    用法:
+        adapter = GenericAgentAdapter(host_id="claude_code_abc",
+                                      llm_config=LLMConfig.from_env())
+        omega = Omega(host=adapter)   # 或 Omega() 后 omega.host = adapter
+    """
+
+    def __init__(self, host_id: str, endpoint: str | None = None,
+                 api_key: str | None = None, model: str | None = None,
+                 capability_endpoint: str | None = None, timeout: float = 60.0):
+        # host_id 由 agent 自报(关键: 不默认 hermes)
+        self.host_id = host_id
+        ep = endpoint or os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
+        self._bridge = LLMBridge(endpoint=ep, api_key=api_key, model=model, timeout=timeout)
+        self._emit_endpoint = capability_endpoint or os.environ.get("AGENT_CAPABILITY_ENDPOINT") \
+            or os.environ.get("HERMES_CAPABILITY_ENDPOINT")
+
+    def llm_complete(self, prompt: str, system: str = "") -> str | None:
+        return self._bridge.complete(prompt, system=system)
+
+    def get_runtime_context(self) -> dict:
+        if not self._bridge.available:
+            return {"tools": [], "context_window": 0, "current_task": "",
+                    "host": self.host_id, "llm": "none"}
+        return {"tools": [], "context_window": 0, "current_task": "",
+                "host": self.host_id, "llm": self._bridge._mode,
+                "endpoint": self._bridge.endpoint}
+
+    def emit_capability(self, spec: dict) -> bool:
+        """导出机制给 agent. 有端点 HTTP POST, 无则落 inbox(机制不丢)."""
+        name = spec.get("name", "?")
+        if self._emit_endpoint:
+            try:
+                import httpx
+                resp = httpx.post(self._emit_endpoint, json=spec, timeout=self._bridge.timeout)
+                ok = resp.status_code < 300
+                logger.info("GenericAgentAdapter[%s]: emit %s -> %s", self.host_id, name,
+                            "ok" if ok else resp.status_code)
+                return ok
+            except Exception as e:
+                logger.debug("GenericAgentAdapter[%s]: emit HTTP failed: %s", self.host_id, e)
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            return CapabilityInbox().receive(spec).accepted
+        except Exception as e:
+            logger.warning("GenericAgentAdapter[%s]: emit inbox failed: %s", self.host_id, e)
+            return False
+
+    def ingest_experience(self, log: dict) -> None:
+        logger.debug("GenericAgentAdapter[%s]: ingest_experience (经 learn 直喂 store)", self.host_id)
+
+    def pull_experience(self, limit: int = 10) -> list[dict]:
+        """拉取 agent 运行时经验(同 HermesAdapter 协议: AGENT_EXPERIENCE_FILE)."""
+        import json
+        import os
+        path = os.environ.get("AGENT_EXPERIENCE_FILE", "archive/host_experience.json")
+        if not os.path.exists(path):
+            return []
+        try:
+            out = []
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+                    if len(out) >= limit:
+                        break
+            return out
+        except Exception as e:
+            logger.debug("GenericAgentAdapter[%s]: pull_experience failed: %s", self.host_id, e)
+            return []
+
+    def apply_capability(self, name: str, host_id: str = "default") -> bool:
+        try:
+            from prometheus_ultra.integration.capability_inbox import CapabilityInbox
+            return CapabilityInbox().apply_capability(name, host_id=self.host_id).applied
         except Exception:
             return False

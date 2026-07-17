@@ -322,7 +322,8 @@ class Omega:
     Supports branch-based parallel experimentation.
     """
 
-    def __init__(self, config: ZConfig | None = None, db_path: str | None = None) -> None:
+    def __init__(self, config: ZConfig | None = None, db_path: str | None = None,
+                 host: Any | None = None) -> None:
         self._cfg = config if config is not None else ZConfig()
         if db_path:
             self._cfg.database_path = db_path
@@ -633,17 +634,25 @@ class Omega:
         self._focus_threshold: int = 3  # 命中>=3 次的主题进入长期关注
 
         # LLM Bridge — 四轨进化(T3/T4)调用外部推理模型(HTTP模式建桥, 无则降级)
+        # V3.0 G2: 优先用 Agent 注入的 LLM 配置(独立进程模式也能复用 Agent LLM),
+        #   否则回退 host bridge(HermesAdapter), 再否则空 bridge(规则降级).
         from prometheus_ultra.integration.llm_bridge import LLMBridge
-        self.llm = LLMBridge()
+        from prometheus_ultra.integration.llm_config import LLMConfig
+        _agent_llm = LLMConfig.from_env()
+        self.llm = _agent_llm.to_llm_bridge() if _agent_llm else LLMBridge()
 
         # P1a+b: 宿主 agent 抽象层 — 默认 HermesAdapter, 可替换为任意 HostAgentAdapter
         # 让 Ultra 成为"任意 agent 的外挂记忆 + 自进化生命体" (解 B5)
         from prometheus_ultra.integration.host_agent import NullHostAdapter
         from prometheus_ultra.integration.hermes_adapter import HermesAdapter
         _host_ep = os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
-        self.host = HermesAdapter() if _host_ep else NullHostAdapter()
-        # 把宿主 LLM 也作为 T3/T4 的推理通道(原 self.llm 即用 host.llm_complete)
-        if isinstance(self.host, HermesAdapter):
+        # V3.1 G3: 允许注入自定义 host adapter(任意 Agent); 否则按 env 选 Hermes/Null
+        if host is not None:
+            self.host = host
+        else:
+            self.host = HermesAdapter() if _host_ep else NullHostAdapter()
+        # 把宿主 LLM 也作为 T3/T4 的推理通道: 若 host 是 HermesAdapter 且带 bridge, 覆盖 env bridge
+        if isinstance(self.host, HermesAdapter) and getattr(self.host, "_bridge", None) is not None:
             self.llm = self.host._bridge
 
         # T2: 语义进化轨道
