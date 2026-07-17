@@ -334,7 +334,10 @@ class MechanismRegistry:
                                  "confidence": getattr(r1, "confidence", 0.0)}
         except Exception as e:
             logger.debug("IronLaw verify failed: %s", e)
-            gates["iron_law"] = {"passed": True, "confidence": 0.5, "note": "unavailable"}
+            # 失败关闭(fail-closed): 安全门执行异常 = 未能验证 = 不得当作通过
+            logger.warning("MechanismRegistry: IronLaw gate errored, blocking activation: %s", e)
+            gates["iron_law"] = {"passed": False, "confidence": 0.0,
+                                 "error": str(e), "note": "gate_error"}
 
         # 门2: AntiEvo
         try:
@@ -345,7 +348,10 @@ class MechanismRegistry:
                                  "verdict": getattr(r2, "verdict", "SAFE")}
         except Exception as e:
             logger.debug("AntiEvo check failed: %s", e)
-            gates["anti_evo"] = {"passed": True, "verdict": "SAFE", "note": "unavailable"}
+            # 失败关闭(fail-closed): AntiEvo 门异常 = 未验证 = 不得激活
+            logger.warning("MechanismRegistry: AntiEvo gate errored, blocking activation: %s", e)
+            gates["anti_evo"] = {"passed": False, "verdict": "UNKNOWN",
+                                 "error": str(e), "note": "gate_error"}
 
         # 门3: FGGM(仅当提供图时)
         if graph is not None:
@@ -357,7 +363,9 @@ class MechanismRegistry:
                                  "node_count": r3.get("node_count", 0)}
             except Exception as e:
                 logger.debug("FGGM verify failed: %s", e)
-                gates["fggm"] = {"passed": True, "note": "unavailable"}
+                # 失败关闭(fail-closed): FGGM 门异常 = 未验证 = 不得激活
+                logger.warning("MechanismRegistry: FGGM gate errored, blocking activation: %s", e)
+                gates["fggm"] = {"passed": False, "error": str(e), "note": "gate_error"}
 
         # 全部通过才激活
         failed = [g for g, v in gates.items() if not v.get("passed", True)]
