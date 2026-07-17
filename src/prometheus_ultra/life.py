@@ -835,7 +835,8 @@ class Omega:
             HarnessPrimitive(name="reflexion", type="control", content="Self-reflection and learning")
         )
 
-        logger.info("Prometheus Ultra initialized: 127 mechanisms across 18 subsystems")
+        logger.info("Prometheus Ultra initialized: %d mechanisms across %d subsystems",
+                     len(self.mechanism_registry._mechanisms), 18)
 
         # 初始化自主神经系统
         from prometheus_ultra.lifecycle.autonomic_regulator import AutonomicRegulator
