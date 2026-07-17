@@ -4355,7 +4355,49 @@ class Omega:
         ti_energy = self.thermodynamic.get_energy()
         energy_score = min(0.1, ti_energy * 0.1)
 
-        total = memory_score + diversity_score + evo_score + health_score + harness_score + util_score + energy_score
+        # Dimension 8: 多类型覆盖度 (0-0.1)
+        try:
+            type_counts = {}
+            for nt in [NodeType.FACT, NodeType.CONCEPT, NodeType.PROCEDURE,
+                       NodeType.PAPER, NodeType.PROJECT, NodeType.SKILL,
+                       NodeType.PATTERN]:
+                c = self.store.get_nodes_by_type(nt, limit=100000)
+                if isinstance(c, (list, tuple)):
+                    type_counts[nt.value] = len(c)
+                elif isinstance(c, int):
+                    type_counts[nt.value] = c
+            non_empty = sum(1 for v in type_counts.values() if v > 0)
+            multitype_score = min(0.1, non_empty * 0.02)
+        except Exception:
+            multitype_score = 0.0
+
+        # Dimension 9: 机制消费率 (0-0.1)
+        try:
+            reg = self.mechanism_registry
+            all_mech = getattr(reg, "_mechanisms", {}) or {}
+            consumed = sum(1 for m in all_mech.values()
+                           if isinstance(m, dict) and (m.get("consumed_at") is not None
+                           or m.get("emit_accepted") is True))
+            total_mech = max(1, len(all_mech))
+            consumption_score = min(0.1, consumed / total_mech * 0.1)
+        except Exception:
+            consumption_score = 0.0
+
+        # Dimension 10: 反刍产出率 (0-0.1)
+        try:
+            hist = getattr(self.knowledge_rumination, "history", [])
+            recent = hist[-1] if hist else None
+            rumination_score = 0.0
+            if recent is not None:
+                promoted = getattr(recent, "skills_promoted", 0) or 0
+                routed = getattr(recent, "routed_nodes", 0) or 0
+                rumination_score = min(0.1, (promoted + routed) / 20.0)
+        except Exception:
+            rumination_score = 0.0
+
+        total = (memory_score + diversity_score + evo_score + health_score
+                 + harness_score + util_score + energy_score
+                 + multitype_score + consumption_score + rumination_score)
         return min(1.0, max(0.0, total))
 
     def _compute_health(self) -> str:
