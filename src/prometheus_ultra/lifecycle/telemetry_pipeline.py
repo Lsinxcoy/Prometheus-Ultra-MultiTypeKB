@@ -70,6 +70,8 @@ class TelemetryPipeline:
             "duration_ms": ("return.duration_ms", "n"),
             "best_strategy": ("return.metadata", "best_strategy"),
             "gate_block_count": ("return.metadata", "gate_block_count"),
+            "consensus_rate": ("return.metadata", "consensus_rate"),
+            "speculative_flag": ("return.metadata", "speculative_flag"),
         },
         "learn": {
             "new_nodes": ("return.new_nodes", "n"),
@@ -259,6 +261,16 @@ class TelemetryPipeline:
                                 count += v
                     return count
                 return 0
+            if name == "consensus_rate" and isinstance(meta, dict):
+                diag = meta.get("diagnostics", {}) or {}
+                cv = diag.get("camp_vote", 0)
+                cp = diag.get("camp_panel", 0)
+                if cp and cv is not None:
+                    return round(cv / max(cp, 1), 3)
+                return None
+            if name == "speculative_flag" and isinstance(meta, dict):
+                diag = meta.get("diagnostics", {}) or {}
+                return bool(diag.get("speculative_result") or diag.get("speculative_fork_merge"))
             return meta
 
         if path == "return.query":

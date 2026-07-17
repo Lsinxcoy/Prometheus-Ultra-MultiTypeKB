@@ -85,3 +85,22 @@ def test_fitness_has_new_dimensions(monkeypatch):
     score = omega._compute_fitness()
     assert isinstance(score, float), "_compute_fitness 必须返回 float"
     assert 0.0 <= score <= 1.0, "fitness 必须在 [0, 1] 区间"
+
+def test_telemetry_evolve_captures_consensus():
+    from prometheus_ultra.lifecycle.telemetry_pipeline import TelemetryPipeline
+    tp = TelemetryPipeline.__new__(TelemetryPipeline)
+    tp._history = {p: [] for p in ["remember","recall","evolve","learn","reflect","dream","maintain","rumination"]}
+    tp._max_window = 50
+    # 真实 EvolutionOutcome.metadata 是 dict（含 diagnostics 子 dict）
+    class Ret:
+        fitness_before = 0.5
+        fitness_after = 0.55
+        result = "SUCCESS"
+        metadata = {"diagnostics": {"camp_vote": 3, "camp_panel": 5, "speculative_result": {"x":1}}}
+    class Omega:
+        _telemetry = {"evolve": Ret()}
+    tp._omega = Omega()
+    tp._on_event({"data": {"type": "evolve_completed"}})
+    s = tp.query("evolve")
+    assert s.signals.get("consensus_rate") is not None
+    assert s.signals.get("speculative_flag") is True

@@ -412,7 +412,9 @@ class CNSOrchestrator:
 
             if delta > self._thresholds["evolve_to_dream_min_delta"]:
                 # 进化有效 → dream 巩固成果
-                if self._can_trigger("dream"):
+                consensus = self._omega.signal_fusion.signal("evolve", "consensus_rate")
+                speculative = self._omega.signal_fusion.signal("evolve", "speculative_flag")
+                if (consensus is None or consensus >= 0.5) and not speculative and self._can_trigger("dream"):
                     self._record_trigger("evolve", "dream",
                         f"delta={delta:.4f} > "
                         f"{self._thresholds['evolve_to_dream_min_delta']}",
