@@ -120,18 +120,17 @@ class KnowledgeRuminationEngine:
 
         if not nodes:
             logger.info("[Rumination] 无候选节点，跳过")
-            return result
+        else:
+            logger.info("[Rumination:%s] 温故 %d 个存量节点", mode, len(nodes))
 
-        logger.info("[Rumination:%s] 温故 %d 个存量节点", mode, len(nodes))
+            for node in nodes:
+                self._relearn_node(node, result)
 
-        for node in nodes:
-            self._relearn_node(node, result)
+            # 高频模式 -> 晋升 skill（知新的系统级产出）
+            self._promote_frequent_patterns(result)
 
-        # 高频模式 -> 晋升 skill（知新的系统级产出）
-        self._promote_frequent_patterns(result)
-
-        # 层3: 燃料供给 — 统计 rail 标签分布, 通知神经系统调度四轨
-        self._supply_fuel(result)
+            # 层3: 燃料供给 — 统计 rail 标签分布, 通知神经系统调度四轨
+            self._supply_fuel(result)
 
         # 更新调度时间戳
         if mode == "full":
@@ -145,6 +144,31 @@ class KnowledgeRuminationEngine:
 
         logger.info("[Rumination:%s] 完成 relearned=%d mappings=%d skills=%d",
                     mode, result.relearned, result.mappings_applied, result.skills_promoted)
+
+        # 发布 rumination_completed 事件，供 Telemetry 采集（修复神经系统对反刍失明）
+        try:
+            bus = getattr(self.omega, "event_bus", None)
+            if bus is not None and hasattr(bus, "publish"):
+                bus.publish({
+                    "type": "rumination_completed",
+                    "data": {
+                        "total_scanned": result.total_scanned,
+                        "relearned": result.relearned,
+                        "concepts_extracted": result.concepts_extracted,
+                        "relations_extracted": result.relations_extracted,
+                        "mappings_applied": result.mappings_applied,
+                        "skills_promoted": result.skills_promoted,
+                        "routed_nodes": result.routed_nodes,
+                        "utility_raised": result.utility_raised,
+                        "deleted_nodes": result.deleted_nodes,
+                        "pending_t3": result.details.get("pending_t3", 0),
+                        "pending_t4": result.details.get("pending_t4", 0),
+                        "fuel_supplied": result.details.get("fuel_supplied", False),
+                    },
+                })
+        except Exception as e:
+            logger.debug("[Rumination] 发布 rumination_completed 事件失败: %s", e)
+
         return result
 
     # ------------------------------------------------------------------

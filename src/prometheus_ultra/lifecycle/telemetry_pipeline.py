@@ -97,6 +97,16 @@ class TelemetryPipeline:
             "traj_actions": ("return.trajectory_actions", "n"),
             "benchmark_avail": ("return.benchmark", "has"),
         },
+        "rumination": {
+            "total_scanned": ("event.data.total_scanned", "n"),
+            "relearned": ("event.data.relearned", "n"),
+            "mappings_applied": ("event.data.mappings_applied", "n"),
+            "skills_promoted": ("event.data.skills_promoted", "n"),
+            "routed_nodes": ("event.data.routed_nodes", "n"),
+            "utility_raised": ("event.data.utility_raised", "n"),
+            "pending_t3": ("event.data.pending_t3", "n"),
+            "pending_t4": ("event.data.pending_t4", "n"),
+        },
     }
 
     def __init__(self, omega: Any) -> None:
