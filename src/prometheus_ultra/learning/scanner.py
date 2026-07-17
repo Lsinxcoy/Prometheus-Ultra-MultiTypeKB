@@ -37,6 +37,7 @@ class ScanSource(Enum):
     WIKI = "wiki"
     LOCAL = "local"
     ACADEMIC = "academic"
+    HOST_EXPERIENCE = "host_experience"  # P1c: 宿主 agent 运行时经验回流(解 B7)
 
 
 @dataclass

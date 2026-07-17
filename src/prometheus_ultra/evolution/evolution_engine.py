@@ -688,6 +688,27 @@ class EvolutionEngine:
         self._params_history: List[Dict[str, float]] = []
         self._history = self._fitness_history  # 兼容别名: state_persistence 引用
 
+    def inject_gene_specs(self, specs: Dict[str, Tuple[float, float]]) -> int:
+        """P0a: 注入外部机制提取的 gene_specs (来自 T3 GitHub 机制提取轨).
+
+        解 B1(僵尸机制): T3 提取的机制激活后, 经此把其参数维度注入进化引擎,
+        让 T3 产物真接生产(而非躺在 registry._enabled 里). 走 A-B 并行原则 —
+        注入的是"候选基因维度", 由后续 evolve() 的适应度评估决定去留, 不强制覆盖.
+
+        Args:
+            specs: {gene_name: (min, max)} 新增基因维度
+        Returns:
+            int: 实际注入的新维度数
+        """
+        added = 0
+        for name, (lo, hi) in specs.items():
+            if name not in self._gene_specs:
+                self._gene_specs[name] = (float(lo), float(hi))
+                added += 1
+        if added:
+            logger.info("EvolutionEngine: injected %d gene specs from T3 (total=%d)", added, len(self._gene_specs))
+        return added
+
     def evolve(self, context: str = "", evaluate_fn: Optional[Callable] = None,
                gene_specs: Optional[Dict[str, Tuple[float, float]]] = None,
                max_generations: Optional[int] = None) -> Dict[str, Any]:

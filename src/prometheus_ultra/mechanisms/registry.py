@@ -44,6 +44,10 @@ class MechanismRegistry:
         self._enabled: set[str] = set()
         self._history: list[dict] = []
         self._health_checks: list[dict] = []
+        # P0a: 激活消费者回调表 — 机制激活后按 category 触发"接生产"动作.
+        # 例: "compiled"(T4)->host.emit_capability; T3 机制->evolution_engine.inject_gene_specs
+        # 解 B1(僵尸机制): 激活不再只是 status=active, 而是真接生产/回流宿主.
+        self._consumers: dict[str, callable] = {}
     
     def register(self, name: str, data: dict | None = None,
                  dependencies: list[str] | None = None,
@@ -117,6 +121,19 @@ class MechanismRegistry:
         self._history.append({"action": "enable", "name": name})
         return True
     
+    def deactivate(self, name: str) -> bool:
+        """P0b: 熔断回滚 — 把已激活/启用的机制移出 _enabled (状态置 disabled).
+
+        区别于手动 disable(): 语义上用于"激活后验证有害, 自动熔断回滚".
+        解 B3: 坏机制激活后若拖垮 fitness, 自动回滚而非永久驻留.
+        """
+        if name not in self._mechanisms:
+            return False
+        self._mechanisms[name]["status"] = "disabled"
+        self._enabled.discard(name)
+        self._history.append({"action": "deactivate", "name": name, "reason": "circuit_break"})
+        return True
+
     def disable(self, name: str) -> bool:
         """禁用机制.
         
@@ -279,8 +296,40 @@ class MechanismRegistry:
         entry["activated_at"] = __import__("time").time()
         self._enabled.add(name)
         self._history.append({"action": "activate", "name": name, "gates": gates})
+        # P0a: 激活后触发消费者回调(接生产) — 解 B1 僵尸机制
+        # T4(category=compiled)->host.emit_capability; T3->inject_gene_specs 等
+        self._consume_active(name, entry)
         return {"activated": True, "reason": "verified", "gates": gates}
+
+    def register_consumer(self, category: str, consumer: callable) -> None:
+        """P0a: 注册某 category 的激活消费者.
+
+        consumer(entry: dict) -> None  在机制激活后被调用, 负责把机制接进生产
+        (如 T4 编译机制 -> 经 HostAgentAdapter 导出给宿主; T3 提取机制 -> 注入 gene_specs).
+        这是 P6'不自动直替'原则的精确落地: 激活=通知消费者生成"建议/补丁",
+        由消费者决定是否/如何接生产(通常走 A-B 并行或宿主确认, 非直接覆盖).
+        """
+        self._consumers[category] = consumer
+
+    def _consume_active(self, name: str, entry: dict) -> None:
+        """P0a: 按 category 派发激活事件给已注册消费者."""
+        category = entry.get("category", "")
+        consumer = self._consumers.get(category)
+        if consumer is None:
+            logger.debug("Registry: no consumer for category=%s (mechanism stays registered)", category)
+            return
+        try:
+            consumer(entry)
+            entry["consumed_at"] = __import__("time").time()
+            self._history.append({"action": "consume", "name": name, "category": category})
+        except Exception as e:
+            logger.warning("Registry: consumer for %s failed: %s", name, e)
+            entry["consume_error"] = str(e)
     
+    def get_enabled(self) -> list[str]:
+        """返回当前已启用(含已激活)机制名列表. 公开接口供监控/熔断使用."""
+        return list(self._enabled)
+
     def health_check(self) -> dict:
         """健康检查.
         

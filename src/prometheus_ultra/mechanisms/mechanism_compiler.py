@@ -85,10 +85,27 @@ class MechanismCompiler:
                 description = out
                 draft_code = out
         else:
-            # 降级: 规则提取(识别 we propose / algorithm / method 段)
+            # 降级(P2a): 无 LLM 时规则提取, 但 draft 不能是纯 stub 空壳 —
+            # 至少含机制描述 + target_location(若已定位) + 人工 apply 指令, 让激活后仍有意义.
             proposals = re.findall(r"(?:we propose|our method|algorithm \d+|our approach)[^\n.]{0,120}", fulltext, re.I)
             description = f"从 {arxiv_id} 提取: " + " | ".join(proposals[:3])
-            draft_code = f"# draft stub for {arxiv_id}\n# {description[:200]}"
+            tl = self._locate_target(description, paper_title)
+            tl_repr = repr(tl) if tl else "{}"
+            draft_code = (
+                f"# DRAFT (rule-extracted, no LLM — requires human review)\n"
+                f"# paper: {arxiv_id} {paper_title}\n"
+                f"# target_location: {tl_repr}\n"
+                f"# apply: 经 P7 行为定位确认位置后, 由宿主/A-B 验证落地, 非自动直替\n"
+                f"# mechanism_summary: {description[:200]}\n"
+                f"from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n\n"
+                f"class {mechanism_name}(BaseMechanism):\n"
+                f"    name = '{mechanism_name}'\n"
+                f"    category = 'compiled'\n"
+                f"    target_location = {tl_repr}\n\n"
+                f"    def run(self, context=None):\n"
+                f"        # TODO: 实现论文机制 (LLM 缺失时仅占位, 待人工补全)\n"
+                f"        return {{'ok': False, 'note': 'rule-extracted draft, awaiting LLM/human implementation'}}\n"
+            )
 
         # P7 方向1: 行为定位 — 编译出机制后, 用 Harness Handbook 定位应改进/插入的代码位置
         target_location = self._locate_target(description, paper_title)

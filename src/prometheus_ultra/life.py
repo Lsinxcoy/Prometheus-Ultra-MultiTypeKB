@@ -19,6 +19,7 @@ Known Defects:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 
@@ -635,6 +636,16 @@ class Omega:
         from prometheus_ultra.integration.llm_bridge import LLMBridge
         self.llm = LLMBridge()
 
+        # P1a+b: 宿主 agent 抽象层 — 默认 HermesAdapter, 可替换为任意 HostAgentAdapter
+        # 让 Ultra 成为"任意 agent 的外挂记忆 + 自进化生命体" (解 B5)
+        from prometheus_ultra.integration.host_agent import NullHostAdapter
+        from prometheus_ultra.integration.hermes_adapter import HermesAdapter
+        _host_ep = os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
+        self.host = HermesAdapter() if _host_ep else NullHostAdapter()
+        # 把宿主 LLM 也作为 T3/T4 的推理通道(原 self.llm 即用 host.llm_complete)
+        if isinstance(self.host, HermesAdapter):
+            self.llm = self.host._bridge
+
         # T2: 语义进化轨道
         from prometheus_ultra.evolution.semantic_evolution import SemanticEvolutionEngine
         self.semantic_evolution = SemanticEvolutionEngine(omega=self)
@@ -646,6 +657,21 @@ class Omega:
         # T4: 论文编译轨道
         from prometheus_ultra.mechanisms.mechanism_compiler import MechanismCompiler
         self.mechanism_compiler = MechanismCompiler(llm=self.llm, store=self.store)
+
+        # P0a: 注册激活消费者 — 机制激活后真接生产(解 B1 僵尸机制)
+        # T3(category=extracted) 激活 -> 注入 gene_specs 进进化引擎
+        # T4(category=compiled) 激活 -> 经 host.emit_capability 导出给宿主
+        try:
+            self.mechanism_registry.register_consumer(
+                "extracted",
+                lambda entry: self._consume_t3(entry),
+            )
+            self.mechanism_registry.register_consumer(
+                "compiled",
+                lambda entry: self._consume_t4(entry),
+            )
+        except Exception as e:
+            logger.debug("Omega: register consumers failed: %s", e)
 
         # S3: T1 进化状态持久化(跨会话累积)
         from prometheus_ultra.evolution.evolution_state import EvolutionState
@@ -2128,6 +2154,48 @@ class Omega:
         return result
 
     # ============================================================
+    # P0a: 激活消费者 — 机制激活后真接生产(解 B1 僵尸机制)
+    # ============================================================
+    def _consume_t3(self, entry: dict) -> None:
+        """T3(GitHub 机制提取)激活后: 把机制参数维度注入进化引擎 gene_specs.
+
+        走 A-B 并行原则(不强制覆盖): 注入的是候选基因维度, 由后续 evolve()
+        的适应度评估决定去留.
+        """
+        data = entry.get("data", {})
+        specs = data.get("gene_specs") or {}
+        # T3 提取的机制可能在 data 里带 derivative gene_specs (mechanism_extractor 产出)
+        if not specs and data.get("executable") is not None:
+            specs = getattr(data["executable"], "gene_specs", {}) or {}
+        if specs:
+            try:
+                added = self.evolution_engine.inject_gene_specs(specs)
+                logger.info("Omega: T3 %s injected %d gene specs into evolution engine", entry["name"], added)
+            except Exception as e:
+                logger.warning("Omega: T3 consume failed: %s", e)
+
+    def _consume_t4(self, entry: dict) -> None:
+        """T4(论文编译)激活后: 经 host.emit_capability 导出机制给宿主 agent.
+
+        这是"建议+宿主确认"语义(对齐 P6 不自动直替): 把 target_location + draft
+        推给宿主, 宿主据此生成 tool/prompt/检索策略, 而非 Ultra 直接改写宿主代码.
+        """
+        data = entry.get("data", {})
+        spec = {
+            "name": entry["name"],
+            "category": "compiled",
+            "target_location": data.get("target_location", {}),
+            "draft_code": data.get("draft_code", ""),
+            "claim": data.get("paper", ""),
+            "activated_at": entry.get("activated_at"),
+        }
+        try:
+            ok = self.host.emit_capability(spec)
+            logger.info("Omega: T4 %s emitted to host (accepted=%s)", entry["name"], ok)
+        except Exception as e:
+            logger.warning("Omega: T4 consume (emit) failed: %s", e)
+
+    # ============================================================
     # evolve pipeline (11 stages — Superpowers enhanced)
     # ============================================================
     def evolve(self, context: str = "", branch: str = "main", confidence: float = 0.5) -> EvolutionOutcome:
@@ -2703,6 +2771,11 @@ class Omega:
         
         # Step 1: KnowledgeScanner
         scan_source = ScanSource(source) if source in [s.value for s in ScanSource] else ScanSource.WEB
+
+        # P1c: 宿主经验回流 — 不走 scanner, 直接经 host.ingest_experience 拉取并路由进 store
+        if scan_source == ScanSource.HOST_EXPERIENCE:
+            return self._learn_host_experience(query, max_results)
+
         results = self.knowledge_scanner.scan(scan_source, query, max_results, force=True)
 
         # Step 2-3: remember each result
@@ -3000,6 +3073,45 @@ class Omega:
         # Record scan for repeated-query detection
         self._scans.append({"query": query, "source": source, "nodes": 0, "ts": time.time(), "reason": "empty_scan"})
         return {"source": source, "query": query, "total_results": 0, "new_nodes": 0, "reason": "empty_scan"}
+
+    # ============================================================
+    # P1c: 宿主经验回流 — 把宿主 agent 运行时经验接进 Ultra 进化燃料(解 B7)
+    # ============================================================
+    def _learn_host_experience(self, query: str = "", max_results: int = 5) -> dict:
+        """从宿主 agent 拉取运行时经验(行为日志/失败/反馈), 路由进 store 供 T2/T4 消费.
+
+        经 self.host.ingest_experience 拉取(宿主 adapter 实现), 每条经验转成 store 节点,
+        由 rumination 打 rail 标签(rail_t2 语义 / rail_t4 论文编译)进入对应进化轨.
+        这是"宿主驱动的自进化"关键: 进化燃料来自宿主真实使用, 而非仅外部知识源.
+        """
+        if not hasattr(self, "host") or self.host is None:
+            return {"source": "host_experience", "query": query, "total_results": 0,
+                    "new_nodes": 0, "reason": "no_host_adapter"}
+        log = {"source": "host_experience", "query": query, "limit": max_results}
+        try:
+            self.host.ingest_experience(log)
+        except Exception as e:
+            logger.debug("learn_host_experience: ingest failed: %s", e)
+        ctx = self.host.get_runtime_context() or {}
+        new_nodes = 0
+        try:
+            task = ctx.get("current_task", "")
+            if task:
+                node = self.remember(
+                    content=f"[host_experience] {task}",
+                    utility=0.55,
+                    tags=["host_experience", "rail_t2", "rail_t4"],
+                    node_type="PROCEDURE",
+                )
+                if node:
+                    new_nodes += 1
+        except Exception as e:
+            logger.debug("learn_host_experience: remember failed: %s", e)
+        return {
+            "source": "host_experience", "query": query,
+            "total_results": new_nodes, "new_nodes": new_nodes,
+            "host": ctx.get("host", "none"),
+        }
 
     # ============================================================
     # reflect pipeline

@@ -141,8 +141,10 @@ class AutonomicRegulator:
             recent = [f for f, _, _ in self._fitness_log[-5:]]
             if len(recent) >= 3 and all(recent[i] < recent[i-1] for i in range(1, len(recent))):
                 self._trigger_downgrade(f"fitness_decline: {recent}")
+                # ===== P0b 熔断门: 连续下降时回滚最近激活的机制(解 B3 僵尸机制无监管) =====
+                # 坏机制激活后若拖垮 fitness, 自动 deactivate (而非永久驻留 _enabled)
+                self._circuit_break_active_mechanisms()
                 # ===== S7: 四轨调度 — 进化停滞 → 触发 T3/T4 超前探索 =====
-                # 参数/语义轨道(T1/T2)已无效, 需借外部机制(T3)或编译新机制(T4)
                 self._trigger_external_evolution(recent[-1])
 
             # 3. 进化长期无增益(停滞) → 同样触发外部探索
@@ -239,6 +241,37 @@ class AutonomicRegulator:
             logger.info("AutonomicRegulator: triggered downgrade — %s", reason)
         except Exception as e:
             logger.warning("AutonomicRegulator._trigger_downgrade: %s", e)
+
+    def _circuit_break_active_mechanisms(self) -> int:
+        """P0b: 熔断门 — fitness 连续下降时回滚最近激活的外部机制.
+
+        解 B3: 激活机制此前无监管(注册进 _enabled 永久生效, 坏机制拖垮系统也不回滚).
+        这里对当前 _enabled 中"外部进化机制"(compiled/extracted 及 pending 类)调用
+        registry.deactivate, 并记录到反进化门供回归检测. 返回实际回滚数.
+
+        安全边界: 只回滚 T3/T4 外部进化机制, 不碰 T1/T2 内生机制(参数/语义),
+        避免误伤系统基础进化能力. 连续 fitness 下降本身就是坏信号, 外部机制嫌疑最大,
+        故不要求 consume_error(宿主拒绝 emit 也未必抛异常).
+        """
+        rolled = 0
+        try:
+            reg = getattr(self._omega, "mechanism_registry", None)
+            if reg is None:
+                return 0
+            for name in list(reg.get_enabled()):
+                entry = reg._mechanisms.get(name, {})
+                cat = entry.get("category", "")
+                if cat in ("compiled", "extracted", "compilation_pending", "extraction_pending"):
+                    if reg.deactivate(name):
+                        rolled += 1
+                        logger.warning("AR: circuit-break deactivated %s (fitness decline)", name)
+                        try:
+                            self._omega.anti_evolution.record_score(entry.get("activated_at", 0.0) or 0.0)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.debug("AR: circuit_break failed: %s", e)
+        return rolled
 
     def _trigger_external_evolution(self, current_fitness: float) -> None:
         """S7: 进化停滞/下降时, 触发 T3(借成熟机制)/T4(编译新机制) 超前探索。
