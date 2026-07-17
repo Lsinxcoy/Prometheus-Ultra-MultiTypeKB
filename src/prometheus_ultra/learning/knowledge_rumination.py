@@ -264,6 +264,15 @@ class KnowledgeRuminationEngine:
             if access == 0 and concepts == 0 and relations == 0 and mappings == 0:
                 gain -= 0.02
 
+            # P1-c (论文② HeRA 借力): 跨 NodeType 拓扑对齐 (MKNN 局部邻域保持)
+            # 论文核心: 跨模态表示对齐到细粒度(head级), 保持拓扑邻域关系.
+            # 映射到 ULTRA: 一个节点若跨越多个轨道(rail_t1~t4 共存), 说明它
+            # 在类型拓扑里连接多类知识(模态对齐), 应获对齐增益(而非孤立降级).
+            tags_l = [t for t in (getattr(node, "tags", []) or [])]
+            rails = [t for t in tags_l if t.startswith("rail_t")]
+            if len(rails) >= 2:
+                gain += 0.04  # 跨模态对齐增益(拓扑邻域保持)
+
             new_util = max(0.0, min(1.0, old_util + gain))
 
             if new_util > old_util + 1e-6:

@@ -48,6 +48,11 @@ class MechanismRegistry:
         # 例: "compiled"(T4)->host.emit_capability; T3 机制->evolution_engine.inject_gene_specs
         # 解 B1(僵尸机制): 激活不再只是 status=active, 而是真接生产/回流宿主.
         self._consumers: dict[str, callable] = {}
+        # P1-b (论文⑥ Superposition CoT 借力): 机制叠加态候选
+        # 论文核心: latent CoT 能在单表示里叠加多个候选解(superposition), 提升表达力.
+        # 映射到 ULTRA: 同一问题保留多个机制候选的叠加态(各带权重),
+        #   运行时按上下文动态选最相关的(而非固定激活一个). 这是 P6 A-B 并行的升级.
+        self._superposed: dict[str, dict] = {}  # super_name -> {candidates: [{name, weight, draft_code, ...}]}
     
     def register(self, name: str, data: dict | None = None,
                  dependencies: list[str] | None = None,
@@ -467,3 +472,46 @@ class MechanismRegistry:
                 logger.warning("Registry: pruned harmful mechanism %s (effect_mean=%.3f)",
                                name, self._mechanisms[name].get("effect_mean", 0.0))
         return rolled
+
+    # ============================================================
+    # P1-b (论文⑥ Superposition CoT 借力): 机制叠加态候选
+    # 同一 super 机制存多个候选(各带 weight), 运行时按上下文动态选择最相关者.
+    # ============================================================
+    def register_superposed(self, super_name: str, candidates: list[dict]) -> None:
+        """注册叠加态机制: 一组候选(各含 name/weight/draft_code/category).
+
+        candidates: [{name, weight, draft_code, category, ...}]
+        权重应归一化(0..1 之和≈1). 运行时 select_by_context 按上下文选最相关候选.
+        """
+        if not candidates:
+            return
+        # 归一化权重
+        total = sum(max(0.0, c.get("weight", 1.0)) for c in candidates) or 1.0
+        for c in candidates:
+            c["weight"] = max(0.0, c.get("weight", 1.0)) / total
+        self._superposed[super_name] = {"candidates": candidates}
+
+    def select_by_context(self, super_name: str, context: str = "") -> dict | None:
+        """从叠加态候选中选最相关者 [P1-b superposition].
+
+        选择策略: 上下文与候选 claim/name 的 token 重叠度 × weight.
+        返回选中的候选 dict(含 name/draft_code/weight), 或 None(无候选).
+        """
+        sp = self._superposed.get(super_name)
+        if not sp:
+            return None
+        cands = sp["candidates"]
+        if not cands:
+            return None
+        ctx_tokens = set(context.lower().split())
+        best, best_score = None, -1.0
+        for c in cands:
+            claim = (c.get("claim") or c.get("name") or "").lower()
+            overlap = len(ctx_tokens & set(claim.split())) if ctx_tokens else 0
+            score = overlap + c.get("weight", 0.0)
+            if score > best_score:
+                best, best_score = c, score
+        return best
+
+    def get_superposed_names(self) -> list[str]:
+        return list(self._superposed.keys())

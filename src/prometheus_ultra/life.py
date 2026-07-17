@@ -1315,10 +1315,15 @@ class Omega:
     # recall pipeline (6 routes)
     # ============================================================
     def recall(self, query: str, limit: int = 10, branch: str = "main",
-               prefer_chunk: bool = False, node_type=None) -> SearchResults:
+               prefer_chunk: bool = False, node_type=None, future_aware: bool = True) -> SearchResults:
         start = time.time()
         all_hits: list[SearchHit] = []
         recall_data = {}
+        # P1-a (论文① Rethink Causal VL 借力): future-aware 检索
+        # 论文核心: 严格因果mask屏蔽未来位置, 对视觉token过死(未来帧含语义线索).
+        # 映射到 ULTRA: recall 默认不应因"时间因果"屏蔽未来记忆(反刍/跨会话).
+        # future_aware=True 时, created_at 晚于当前的节点(未来记忆)不降权反而微boost.
+        _now = time.time()
 
         # ========== P2: Learning Layer — SimpleMem意图感知检索 ==========
         # arXiv 2601.02553 (SimpleMem)
@@ -1396,8 +1401,14 @@ class Omega:
 
         # Route 1: FTS
         fts_nodes = self.store.search(query, limit=limit * 2, branch=branch)
-        all_hits.extend(SearchHit(node_id=n.id, score=n.utility, content=n.content,
-                                  snippet=n.content[:200]) for n in fts_nodes)
+        for n in fts_nodes:
+            _boost = 0.0
+            _cat = getattr(n, "created_at", 0.0) or 0.0
+            if future_aware and _cat > _now:
+                _boost = 0.05  # 未来记忆微boost(论文①: 未来上下文含语义线索)
+            all_hits.append(SearchHit(node_id=n.id, score=min(1.0, n.utility + _boost),
+                                      content=n.content, snippet=n.content[:200],
+                                      metadata={"created_at": _cat}))
 
         # Route 2: GraphMemory
         for r in self.graph_memory.search(query, limit=limit):
