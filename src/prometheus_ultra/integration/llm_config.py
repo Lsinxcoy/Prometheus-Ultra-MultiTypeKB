@@ -54,8 +54,10 @@ class LLMConfig:
         探测顺序(严格不依赖网络代理):
         1. env 注入 (AGENT_LLM_* / HERMES_LLM_*)  — 最高优先, 人工覆盖
         2. Hermes config.yaml 的 model 段 (base_url + api_key + model) — 持久化配置
-        3. 探测 Hermes 可能暴露的本地 LLM 代理端口 (127.0.0.1:PORT/v1/chat/completions)
-           — 未来 Hermes 若起本地 LLM 代理, Ultra 自动复用
+        3. 探测 Hermes 可能暴露的本地 LLM 代理端口
+           (127.0.0.1:PORT/v1/chat/completions) — 未来 Hermes 若起本地代理,
+           Ultra 自动复用(解决 Nouns Portal OAuth 隔离: Hermes 把 OAuth 包装成
+           本地 OpenAI 兼容代理, Ultra 独立进程即可复用, 无需碰 Hermes 内存 token)
         全部失败返回 None (T4 诚实降级, 非崩溃).
         """
         # 1. env 优先
@@ -72,17 +74,64 @@ class LLMConfig:
                 m = cfg.get("model", {}) or {}
                 ep = m.get("base_url") or m.get("endpoint")
                 if ep:
+                    prov = (m.get("provider") or "auto").lower()
+                    # Nouns Portal = OAuth(非 api_key). Ultra 独立进程取不到 OAuth token,
+                    #   故: 有 api_key 则直连, 否则标记需本地代理/key(诚实).
+                    api_key = m.get("api_key", "")
+                    if prov == "nous" and not api_key:
+                        logger.info("LLMConfig.from_hermes: Nouns Portal 为 OAuth 模式, "
+                                    "Ultra 独立进程无 OAuth token. 若有本地 LLM 代理端口将自动探测; "
+                                    "否则 T4 诚实降级(需 Hermes 起本地代理或填 api_key).")
                     return cls(
                         endpoint=ep,
-                        api_key=m.get("api_key", ""),  # [REDACTED]
+                        api_key=api_key,  # [REDACTED]
                         model=m.get("default") or m.get("model") or "",
-                        provider=m.get("provider", "auto"),
+                        provider=prov,
                     )
         except Exception as e:
             logger.debug("LLMConfig.from_hermes: config.yaml 探测失败 %s", e)
-        # 3. 探测本地 LLM 代理端口(未来扩展点, 当前不强制)
-        #    (保留接口: 若 Hermes 起 127.0.0.1:PORT 的 OpenAI 兼容代理, 此处自动发现)
+        # 3. 探测本地 LLM 代理端口(Hermes 起的 OAuth 包装代理)
+        #    Nouns Portal 场景下, Hermes 把 OAuth 包装成 127.0.0.1:PORT 的 OpenAI 兼容代理,
+        #    Ultra 自动发现并复用 — 这是"自动复用 Agent LLM"的干净落地.
+        _proxy = cls._discover_local_llm_proxy()
+        if _proxy is not None:
+            return _proxy
         # 4. 全部失败
+        return None
+
+    @staticmethod
+    def _discover_local_llm_proxy() -> "LLMConfig | None":
+        """探测 127.0.0.1 常见 LLM 代理端口(OpenAI 兼容 /chat/completions).
+
+        仅做本地端口探测(不依赖外网代理), 发现则返回配置.
+        探测端口: 依次尝试 11434(clash/cf-worker 类), 8000, 8080, 12434 等.
+        """
+        import socket
+        candidates = [11434, 8000, 8080, 12434, 9999, 8899]
+        for port in candidates:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.3)
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    # 端口开 -> 试探 /v1/chat/completions 是否像 LLM 代理
+                    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request(url, data=b"{}",
+                                                   headers={"Content-Type": "application/json"},
+                                                   method="POST")
+                        with urllib.request.urlopen(req, timeout=0.5) as r:
+                            r.read()
+                    except urllib.error.HTTPError as he:
+                        # 400/401/405 等仍说明这是 LLM 代理端点(只是需正确 payload/auth)
+                        if he.code in (400, 401, 405, 422):
+                            logger.info("LLMConfig: 发现本地 LLM 代理 %s", url)
+                            return LLMConfig(endpoint=url, provider="local-proxy")
+                    except Exception:
+                        pass
+                s.close()
+            except Exception:
+                continue
         return None
 
     def to_llm_bridge(self):

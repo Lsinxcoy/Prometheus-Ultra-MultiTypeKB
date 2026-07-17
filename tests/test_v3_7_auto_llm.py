@@ -55,6 +55,23 @@ class TestAutoReuseHermesLLM:
         assert cfg.api_key == "sk-test"
         assert cfg.model == "claude-sonnet-4"
 
+    def test_nous_provider_auto_read(self, clean_env, monkeypatch, tmp_path):
+        """V3.7b: provider=nous 时自动读 config.yaml model 段(即使无 api_key)."""
+        from prometheus_ultra.integration.llm_config import LLMConfig
+        cfg_dir = tmp_path / ".hermes"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.yaml").write_text(
+            "model:\n  base_url: https://inference-api.nousresearch.com/v1\n"
+            "  default: tencent/hunyuan-hy3:free\n  provider: nous\n",
+            encoding="utf-8")
+        monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path) if p == "~" else p)
+        cfg = LLMConfig.from_hermes()
+        assert cfg is not None
+        assert "inference-api.nousresearch.com" in cfg.endpoint
+        assert cfg.provider == "nous"
+        assert cfg.model == "tencent/hunyuan-hy3:free"
+        assert cfg.available is True  # endpoint 非空即可用(即使 OAuth 需本地代理)
+
     def test_no_config_returns_none_honest_degrade(self, clean_env, monkeypatch, tmp_path):
         """无任何 LLM 配置 -> None (T4 诚实降级, 非崩溃, 非 NullHost 丢宿主)."""
         from prometheus_ultra.integration.llm_config import LLMConfig
