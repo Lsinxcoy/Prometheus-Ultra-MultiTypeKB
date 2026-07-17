@@ -414,7 +414,7 @@ class MechanismRegistry:
         for mech in self._mechanisms.values():
             cat = mech["category"]
             categories[cat] = categories.get(cat, 0) + 1
-        
+
         return {
             "registered": len(self._mechanisms),
             "enabled": len(self._enabled),
@@ -422,3 +422,48 @@ class MechanismRegistry:
             "history_size": len(self._history),
             "total_invocations": sum(m["invoke_count"] for m in self._mechanisms.values()),
         }
+
+    # ============================================================
+    # P0-a (论文③ Grad Token Pruning 借力): 机制级效用追踪 + 主动剪枝
+    # 论文核心: 干扰pattern(伪相关)误导注意力 -> 梯度引导剪枝.
+    # 映射到 ULTRA: 机制若反复负效用(伪相关/对宿主无价值), 主动剪枝,
+    #   不等 fitness 连续下降才 C3 回滚(那是事后补救, 这是事前主动).
+    # ============================================================
+    def record_mechanism_effect(self, name: str, effect: float) -> None:
+        """记录机制被宿主/系统使用后的效用反馈. effect∈[-1,1], 正=有益, 负=有害.
+
+        这是论文③"梯度引导"的等效: 负反馈机制权重下降, 正反馈上升.
+        """
+        if name not in self._mechanisms:
+            return
+        e = self._mechanisms[name]
+        hist = e.setdefault("effect_history", [])
+        hist.append(effect)
+        if len(hist) > 50:
+            hist[:] = hist[-30:]
+        # 滚动均值作为当前效用估计(梯度方向)
+        e["effect_mean"] = sum(hist) / len(hist)
+
+    def get_prune_candidates(self, threshold: float = -0.3) -> list[str]:
+        """返回效用均值低于阈值的机制名(应被剪枝的'干扰pattern')."""
+        out = []
+        for name, e in self._mechanisms.items():
+            mean = e.get("effect_mean")
+            if mean is not None and mean < threshold and name in self._enabled:
+                out.append(name)
+        return out
+
+    def prune_harmful(self, threshold: float = -0.3) -> int:
+        """主动剪枝负效用机制 [P0-a]. 返回实际剪枝数.
+
+        与 C3 熔断门区别: C3 是 fitness 下降后回滚(事后); 此处是机制效用
+        持续为负即主动剪枝(事前梯度引导), 不等到拖垮系统. 对应论文③的
+        '移除干扰pattern提升推理'.
+        """
+        rolled = 0
+        for name in self.get_prune_candidates(threshold):
+            if self.deactivate(name):
+                rolled += 1
+                logger.warning("Registry: pruned harmful mechanism %s (effect_mean=%.3f)",
+                               name, self._mechanisms[name].get("effect_mean", 0.0))
+        return rolled

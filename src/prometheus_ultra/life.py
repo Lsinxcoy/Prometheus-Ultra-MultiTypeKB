@@ -2202,6 +2202,14 @@ class Omega:
     # ============================================================
     def evolve(self, context: str = "", branch: str = "main", confidence: float = 0.5) -> EvolutionOutcome:
         start = time.time()
+        # P0-b (论文⑤ Thought Leap Bridge 借力): 进化链完整性追踪
+        # 论文核心: CoT 思维跳跃(专家省略中间步) -> 检测+补步.
+        # 映射到 evolve 11-stage: 若关键 stage 因 except:pass 静默跳过, 进化链不完整(leap).
+        # 此处记录关键 stage 是否真执行, 末尾暴露 chain_complete(而非假装成功).
+        chain_trace = {
+            "brainstorm": False, "plan": False, "main_evolve": False,
+            "semantic": False, "state_save": False, "verify": False,
+        }
 
         # 链上下文：读取触发管的信号
         try:
@@ -2222,12 +2230,14 @@ class Omega:
         brainstorm_result = self.brainstorming.brainstorm(
             topic=context or "auto-evolution"
         )
+        chain_trace["brainstorm"] = True
 
         # PlanWriter: generate implementation plan from brainstorming (Superpowers)
         plan = self.plan_writer.write_plan(
             feature=context or "auto-evolution",
             context="evolve pipeline after brainstorming",
         )
+        chain_trace["plan"] = True
 
         # LoopSelector: auto-select loop strategy
         loop_config = self.loop_selector.select(context)
@@ -2457,6 +2467,7 @@ class Omega:
             except Exception:
                 pass
         self.evolution_engine.evolve(derived_context, gene_specs=derived_specs or None)
+        chain_trace["main_evolve"] = True
         fitness_after = self._compute_fitness()
 
         # ===== T2: 语义进化轨道 =====
@@ -2468,12 +2479,14 @@ class Omega:
                             sem_result.get("evolved_concepts", 0),
                             sem_result.get("promoted", 0), sem_result.get("pruned", 0))
             learn_diagnostics["semantic_evolution"] = sem_result
+            chain_trace["semantic"] = True
         except Exception as e:
             logger.debug("Evolve: T2 semantic evolution failed: %s", e)
 
         # ===== S3: T1 进化状态持久化(跨会话累积) =====
         try:
             self.evolution_state.save(self.evolution_engine)
+            chain_trace["state_save"] = True
         except Exception as e:
             logger.debug("Evolve: state save failed: %s", e)
 
@@ -2484,6 +2497,7 @@ class Omega:
             fix_applied="fitness_delta=%.4f" % delta,
             tests_passing=delta >= -0.01,
         )
+        chain_trace["verify"] = True
 
         # TDD Verifier — verify test coverage (Superpowers)
         tdd_result = self.tdd_verifier.verify(
@@ -2717,11 +2731,17 @@ class Omega:
         diagnostics["eval_convergence"] = self.eval_engine.get_convergence_curve()
 
         self.event_bus.publish({"type": "evolve_completed", "fitness_before": fitness_before, "fitness_after": fitness_after, "result": "SUCCESS", "strategy": strategy})
+        # P0-b: 暴露进化链完整性(Thought Leap 检测) — 关键 stage 若有 leap, 明确标记
+        missing_stages = [k for k, v in chain_trace.items() if not v]
+        chain_complete = len(missing_stages) == 0
+        diagnostics["chain_trace"] = chain_trace
+        diagnostics["chain_complete"] = chain_complete
+        diagnostics["chain_missing_stages"] = missing_stages
         evolve_result = EvolutionOutcome(
             result=EvolutionResult.SUCCESS,
             fitness_before=fitness_before, fitness_after=fitness_after,
             duration_ms=(time.time() - start) * 1000,
-            details=f"delta={delta:.4f}, diagnostics_keys={list(diagnostics.keys())}",
+            details=f"delta={delta:.4f}, diagnostics_keys={list(diagnostics.keys())}, chain_complete={chain_complete}",
             metadata=diagnostics,
         )
         # Telemetry: 存储原始返回值
