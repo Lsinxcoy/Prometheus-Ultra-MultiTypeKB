@@ -656,9 +656,17 @@ class Omega:
             # 优先: 显式 LLM endpoint -> HermesAdapter(带 bridge)
             # 默认: 仍 Hermes 宿主(无 LLM 时 bridge.available=False, T4 降级)
             self.host = HermesAdapter()
-        # 把宿主 LLM 也作为 T3/T4 的推理通道: 若 host 是 HermesAdapter 且带 bridge, 覆盖 env bridge
-        if isinstance(self.host, HermesAdapter) and getattr(self.host, "_bridge", None) is not None:
-            self.llm = self.host._bridge
+        # 把宿主 LLM 也作为 T3/T4 的推理通道: 自动复用 Agent(Hermes) 的 LLM 配置
+        # V3.7 修正: 自动探测(from_hermes), 与代理(clash等)完全解耦 — 代理只是网络通道
+        if isinstance(self.host, HermesAdapter):
+            _llm_cfg = LLMConfig.from_hermes()  # 自动: env > hermes config.yaml > 探测端口
+            if _llm_cfg is not None:
+                self.host = HermesAdapter(endpoint=_llm_cfg.endpoint, api_key=_llm_cfg.api_key,
+                                            model=_llm_cfg.model)
+                self.llm = self.host._bridge
+            else:
+                # 无 LLM 配置: 仍 Hermes 宿主身份, T4 诚实降级(非 NullHost)
+                self.llm = None
 
         # T2: 语义进化轨道
         from prometheus_ultra.evolution.semantic_evolution import SemanticEvolutionEngine
