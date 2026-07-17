@@ -665,8 +665,10 @@ class Omega:
                                             model=_llm_cfg.model)
                 self.llm = self.host._bridge
             else:
-                # 无 LLM 配置: 仍 Hermes 宿主身份, T4 诚实降级(非 NullHost)
-                self.llm = None
+                # 无 LLM 配置: 仍 Hermes 宿主身份, self.llm 建空 bridge(available=False)
+                #   保持 'o.llm 永远非 None' 契约(T4 诚实降级, 非 NullHost/非 None 崩)
+                from prometheus_ultra.integration.llm_bridge import LLMBridge
+                self.llm = LLMBridge()
 
         # T2: 语义进化轨道
         from prometheus_ultra.evolution.semantic_evolution import SemanticEvolutionEngine
