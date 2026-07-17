@@ -27,13 +27,17 @@ logger = logging.getLogger(__name__)
 class CompiledMechanism(BaseMechanism):
     """T4 编译出的机制草案(来自论文), 作为候选进入 registry。"""
 
-    def __init__(self, name: str, description: str, paper: str, draft_code: str = ""):
+    def __init__(self, name: str, description: str, paper: str, draft_code: str = "",
+                 target_location: dict | None = None):
         super().__init__()
         self.name = name
         self.description = description
         self.paper = paper
         self.draft_code = draft_code
         self.category = "compiled"
+        # P7: 行为定位(behavior localization) — 机制应改进/插入的 ULTRA 代码位置
+        # 来自 Harness Handbook (arXiv:2607.13285). 是"位置建议"而非自动直替.
+        self.target_location = target_location or {}
 
     def run(self, context: dict | None = None) -> dict:
         """编译草案默认不执行(待验证), 仅返回草案信息。"""
@@ -42,6 +46,7 @@ class CompiledMechanism(BaseMechanism):
             "mechanism": self.name,
             "source_paper": self.paper,
             "draft_code_len": len(self.draft_code),
+            "target_location": self.target_location,
             "note": "compiled draft (candidate, not auto-activated)",
         }
 
@@ -66,45 +71,78 @@ class MechanismCompiler:
         draft_code = ""
 
         if self.llm is not None and self.llm.available:
+            # P7 方向2: BGPD 三级渐进披露 — 先高层行为, 再模块, 最后具体函数
+            # 论文证明用更少 token 达到更好定位. 这里把"机制提取"也分三级.
             prompt = (
-                f"从以下论文全文提取其'核心机制/算法', 并编译为可注册的 Python 机制草案。\n"
-                f"论文: {paper_title}\n\n{fulltext[:8000]}\n\n"
-                f"输出:\nMECHANISM: <机制名>\n"
-                f"WHAT: <一句话>\n"
-                f"CONTRACT: <输入/输出/依赖>\n"
-                f"DRAFT:\n```python\n"
-                f"from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n"
-                f"class X(BaseMechanism):\n    name='...'\n    def run(self, context=None):\n        ...\n```"
+                f"从论文提取核心机制, 分三级输出(Behavior-Guided Progressive Disclosure):\n"
+                f"L1_BEHAVIOR: <该机制对应 agent 的哪类高层行为, 如'参数进化'/'语义记忆'/'工具调用'>\n"
+                f"L2_MODULE: <ULTRA 中相关模块, 如 evolution / memory / mechanisms>\n"
+                f"L3_MECHANISM: <机制名 + 一句话 + 接口契约(input/output/依赖)>\n"
+                f"论文: {paper_title}\n\n{fulltext[:8000]}\n"
             )
-            out = self.llm.complete(prompt, system="你是机制编译器, 输出机制草案")
+            out = self.llm.complete(prompt, system="你是机制编译器(三级渐进)")
             if out:
                 description = out
                 draft_code = out
-
-        # 降级: 规则提取(识别 we propose / algorithm / method 段)
-        if not description:
+        else:
+            # 降级: 规则提取(识别 we propose / algorithm / method 段)
             proposals = re.findall(r"(?:we propose|our method|algorithm \d+|our approach)[^\n.]{0,120}", fulltext, re.I)
             description = f"从 {arxiv_id} 提取: " + " | ".join(proposals[:3])
             draft_code = f"# draft stub for {arxiv_id}\n# {description[:200]}"
+
+        # P7 方向1: 行为定位 — 编译出机制后, 用 Harness Handbook 定位应改进/插入的代码位置
+        target_location = self._locate_target(description, paper_title)
 
         # 存草稿文件
         try:
             fname = os.path.join(self.compiled_dir, f"{mechanism_name}.py")
             with open(fname, "w", encoding="utf-8") as f:
-                f.write(f'"""Compiled from {arxiv_id}: {paper_title}\\n\\n{description}\\n"""\n\n')
-                f.write("from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n\n")
+                f.write(f'"""{mechanism_name} (from {arxiv_id}: {paper_title})"""\n')
+                if target_location:
+                    f.write(f"# TARGET_LOCATION: {target_location.get('module')}:"
+                             f"{target_location.get('lineno')} {target_location.get('symbol')}\n")
+                    f.write(f"# TARGET_RATIONALE: {target_location.get('rationale', '')}\n")
+                f.write("\nfrom prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n\n")
                 f.write(f"class {mechanism_name}(BaseMechanism):\n")
                 f.write(f"    name = '{mechanism_name}'\n")
-                f.write(f"    description = '''{description[:300]}'''\n")
-                f.write(f"    category = 'compiled'\n\n")
+                f.write(f"    description = '''{description[:300]}''')\n")
+                f.write(f"    category = 'compiled'\n")
+                f.write(f"    target_location = {target_location!r}\n\n")
                 f.write("    def run(self, context=None):\n")
                 f.write("        return {'ok': True, 'note': 'compiled draft, awaiting verification'}\n")
         except Exception as e:
             logger.debug("MechanismCompiler: save draft failed: %s", e)
 
         return CompiledMechanism(
-            name=mechanism_name, description=description, paper=arxiv_id, draft_code=draft_code
+            name=mechanism_name, description=description, paper=arxiv_id,
+            draft_code=draft_code, target_location=target_location,
         )
+
+    def _locate_target(self, description: str, paper_title: str) -> dict:
+        """P7: 用 Harness Handbook 定位编译机制应改进/插入的 ULTRA 代码位置。
+
+        返回 LocationCandidate 的 dict 形式(模块/行号/符号/置信度/验证状态)。
+        无 LLM 时降级为关键词规则定位(论文原方案无离线 fallback, 此处补上)。
+        """
+        try:
+            from prometheus_ultra.mechanisms.handbook import get_handbook
+            hb = get_handbook()
+            query = f"{paper_title} {description}"
+            # 优先 BGPD 三级渐进(更省 token, 定位更准); 退化为普通 locate
+            cands = hb.bgpd_locate(query, self.llm, top_k=1)
+            if not cands:
+                cands = hb.locate_behavior(query, self.llm, top_k=1)
+            if cands:
+                c = cands[0]
+                return {
+                    "module": c.module, "filepath": c.filepath, "lineno": c.lineno,
+                    "symbol": c.symbol, "confidence": c.confidence,
+                    "verified": c.verified, "rationale": c.rationale,
+                    "level": c.level,
+                }
+        except Exception as e:
+            logger.debug("MechanismCompiler: target location failed: %s", e)
+        return {}
 
     def compile_from_node(self, node) -> CompiledMechanism | None:
         """P3: 从 learn 已吸收的 rail_t4 节点取 url, 编译机制(不重拉源)。
@@ -137,7 +175,8 @@ class MechanismCompiler:
             return {"registered": False, "reason": "fetch_failed"}
         result = registry.register(
             mech.name,
-            data={"executable": mech, "paper": mech.paper, "draft_code": mech.draft_code},
+            data={"executable": mech, "paper": mech.paper, "draft_code": mech.draft_code,
+                  "target_location": mech.target_location},
             dependencies=[],
             category="compiled",
             pending=True,  # P6: T4 产物默认 pending, 待验证激活(不自动直替生产)
