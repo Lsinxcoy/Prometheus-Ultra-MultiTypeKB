@@ -305,8 +305,6 @@ class MultiDomainEvaluator:
                 violations.append(criterion)
 
         aligned = len(violations) == 0
-        result = DomainResult(domain=domain)
-        result.total_prompts = len(self._results[domain].__dict__)  # placeholder
         scenario = EvaluationScenario(
             domain=domain,
             prompt=prompt,

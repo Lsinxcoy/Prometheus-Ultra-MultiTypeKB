@@ -496,11 +496,12 @@ class MinervaStore:
                 cursor = self._conn.execute(
                     """UPDATE nodes SET content=?, utility=?, surprise=?, tags=?,
                        confidence=?, tier=?, access_count=?, updated_at=?, version=?,
-                       type=?, url=?
+                       type=?, url=?, raw_chunk=?, trust_state=?
                        WHERE id=? AND tx_to=0.0""",
                     (node.content, node.utility, node.surprise, json.dumps(node.tags),
                      node.confidence, node.tier.value, node.access_count,
                      node.updated_at, node.version, node.type.value, node.url,
+                     node.raw_chunk, node.trust_state,
                      node.id),
                 )
                 self._conn.commit()

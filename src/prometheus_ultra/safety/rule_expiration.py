@@ -75,7 +75,7 @@ class RuleExpirationAudit:
             "status": self.ACTIVE,
             "created_at": time.time(),
             "trigger_count": 0,
-            "existed_at": None,  # 过期时间
+            "expired_at": None,  # 过期时间
         }
     
     def trigger_rule(self, rule_id: str):

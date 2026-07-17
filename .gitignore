@@ -1,6 +1,8 @@
-# 散落根目录的调试/临时脚本（非正式测试，保留在磁盘但不入版本库）
-debug_*.py
-test_*.py
+# 仅忽略散落根目录的调试/临时脚本（非 tests/ 下的正式测试）
+# 注意: 无前导 '/' 的 test_*.py 会递归忽略所有子目录的测试文件,
+# 导致 tests/ 下 55+ 正式测试文件无法入版本库 —— 故限制为根目录 /test_*.py
+/debug_*.py
+/test_*.py
 knowledge_graph.json
 
 # Python 缓存
@@ -20,3 +22,7 @@ venv/
 *.db-wal
 *.json
 .coverage
+
+# 运行时产物(编译/日志)
+archive/compiled/
+wal_logs/

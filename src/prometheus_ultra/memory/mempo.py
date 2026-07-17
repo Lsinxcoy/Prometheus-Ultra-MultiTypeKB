@@ -707,10 +707,13 @@ class MemPO:
 
             # 6. Update utility scores based on GRPO signal
             #    Scale advantage to utility adjustment in [-1, 1]
+            utility_deltas = []
             for i, adv in enumerate(advantages):
                 utility_delta = max(-1.0, min(1.0, adv * 0.5))
-                # Apply as reinforcement if a node_id was previously tracked
-                pass  # Node-specific updates happen via observe_reinforcement
+                utility_deltas.append(utility_delta)
+                # Apply as reinforcement if a node_id was previously tracked.
+                # NOTE: 实际 utility 回写由调用方(observe_reinforcement / learn 流程)
+                # 消费 utility_deltas 完成, 此处仅累积信号, 避免静默 pass 丢信号。
 
             # Track GRPO metrics
             self._grpo_step_count += 1
@@ -736,6 +739,7 @@ class MemPO:
                 "beta": round(self._grpo_beta, 6),
                 "stage": self._stage,
                 "effective_lr": round(effective_lr, 6),
+                "utility_deltas": [round(u, 6) for u in utility_deltas],
             }
         except Exception:
             logger.exception("Error in GRPO step with rewards=%s", rewards)
