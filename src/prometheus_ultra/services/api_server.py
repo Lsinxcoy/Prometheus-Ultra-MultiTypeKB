@@ -771,6 +771,15 @@ class UltraAPIServer:
                     "type_distribution": type_dist,
                 }
 
+                # ── 适应度分解 (B1 三维可见性) ──
+                fit_detail = {}
+                try:
+                    o._compute_fitness()  # 触发计算, 填充 _last_fitness_detail
+                    fit_detail = getattr(o, "_last_fitness_detail", {}) or {}
+                except Exception:
+                    pass
+                summary["fitness_detail"] = fit_detail
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:

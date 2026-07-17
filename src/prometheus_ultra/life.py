@@ -2892,7 +2892,13 @@ class Omega:
         import re as _re
         _PARAM_RE = _re.compile(r"[a-zA-Z_]+[_-]?(rate|lr|alpha|beta|gamma|threshold|temp|decay)\s*[=:]\s*[\d.]+", _re.I)
         def _classify(source: str, content: str, tags: list) -> tuple:
-            """返回 (NodeType, [rail标签]) — 基于源类型与内容模式。"""
+            """返回 (NodeType, [rail标签]) — 基于源类型与内容模式。
+
+            源类型硬分(github/arxiv/wiki) 优先; 其余(web 等) 默认 FACT,
+            但追加内容级识别: arxiv/github URL 或论文/代码特征词 →
+            自动提升为 PAPER/PROJECT (解 B-级根因: 调用方传 web 时
+            论文/代码不再全降级为 FACT)。
+            """
             rails = []
             ntype = NodeType.FACT
             s = source.lower()
@@ -2905,6 +2911,18 @@ class Omega:
             elif s == "wiki":
                 ntype = NodeType.CONCEPT
                 rails.append("rail_t2")
+            else:
+                # 内容级兜底: 即使 source=web, 也能识别论文/代码
+                low = (content or "").lower()
+                if "arxiv.org" in low or re.search(r"\d{4}\.\d{4,5}", low):
+                    ntype = NodeType.PAPER
+                    rails.append("rail_t4")
+                elif "github.com" in low or "def " in low and "import " in low:
+                    ntype = NodeType.PROJECT
+                    rails.append("rail_t3")
+                elif any(k in low for k in ("et al.", "proceedings", "doi:", "abstract")):
+                    ntype = NodeType.PAPER
+                    rails.append("rail_t4")
             # 内容模式: 含参数值 -> 促参数进化
             if _PARAM_RE.search(content):
                 rails.append("rail_t1")
@@ -4403,6 +4421,20 @@ class Omega:
         total = (memory_score + diversity_score + evo_score + health_score
                  + harness_score + util_score + energy_score
                  + multitype_score + consumption_score + rumination_score)
+        # 暴露三维分解, 供 dashboard_summary / 监控脚本读取(B1 产出可见性)
+        self._last_fitness_detail = {
+            "total": round(min(1.0, max(0.0, total)), 4),
+            "memory": round(memory_score, 4),
+            "diversity": round(diversity_score, 4),
+            "evolution": round(evo_score, 4),
+            "health": round(health_score, 4),
+            "harness": round(harness_score, 4),
+            "utility": round(util_score, 4),
+            "energy": round(energy_score, 4),
+            "multitype": round(multitype_score, 4),
+            "consumption": round(consumption_score, 4),
+            "rumination": round(rumination_score, 4),
+        }
         return min(1.0, max(0.0, total))
 
     def _compute_health(self) -> str:

@@ -26,6 +26,28 @@ from prometheus_ultra.integration.llm_bridge import LLMBridge
 class HostAgentAdapter(abc.ABC):
     """宿主 agent 抽象接口. 所有具体宿主(Hermes/Claude Code/AutoGPT/自研)实现此接口."""
 
+    def _mark_consumed(self, name: str) -> None:
+        """机制被宿主消费(emit/apply) → 沉淀消费标记进 MechanismRegistry.
+
+        D1+B1 联动: AR 经事件记 fitness 趋势(瞬时), 此处把消费沉淀进
+        registry._mechanisms[name]['consumed_at'] (持久), 使 _compute_fitness
+        的 consumption_score 维度(consumed/total) 从死维度变活维度。
+        Omega 经 D1 反向持有(self._omega) 可访问 registry; 无则静默跳过。
+        """
+        try:
+            omega = getattr(self, "_omega", None)
+            if omega is None:
+                return
+            reg = getattr(omega, "mechanism_registry", None)
+            if reg is None:
+                return
+            mechs = getattr(reg, "_mechanisms", None) or {}
+            entry = mechs.get(name)
+            if isinstance(entry, dict):
+                entry["consumed_at"] = __import__("time").time()
+        except Exception as e:
+            logger.debug("HostAgentAdapter._mark_consumed(%s) failed: %s", name, e)
+
     # 多宿主隔离标识 [P2 C5]: 同一 Ultra 服务多个 agent 时, 经验/机制按 host_id 分区
     host_id: str = "default"
 
@@ -102,6 +124,7 @@ class NullHostAdapter(HostAgentAdapter):
                 bus = getattr(self, "_omega", None)
                 if bus is not None and hasattr(bus, "event_bus"):
                     bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": bool(accepted)}})
+                    self._mark_consumed(name)
             except Exception:
                 pass
             return accepted
@@ -123,6 +146,7 @@ class NullHostAdapter(HostAgentAdapter):
                 bus = getattr(self, "_omega", None)
                 if bus is not None and hasattr(bus, "event_bus"):
                     bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "apply", "accepted": bool(applied)}})
+                    self._mark_consumed(name)
             except Exception:
                 pass
             return applied
@@ -177,6 +201,7 @@ class GenericAgentAdapter(HostAgentAdapter):
                     bus = getattr(self, "_omega", None)
                     if bus is not None and hasattr(bus, "event_bus"):
                         bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": True}})
+                    self._mark_consumed(name)
                 except Exception:
                     pass
                 return ok
@@ -189,6 +214,7 @@ class GenericAgentAdapter(HostAgentAdapter):
                 bus = getattr(self, "_omega", None)
                 if bus is not None and hasattr(bus, "event_bus"):
                     bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "emit", "accepted": bool(accepted)}})
+                    self._mark_consumed(name)
             except Exception:
                 pass
             return accepted
@@ -232,6 +258,7 @@ class GenericAgentAdapter(HostAgentAdapter):
                 bus = getattr(self, "_omega", None)
                 if bus is not None and hasattr(bus, "event_bus"):
                     bus.event_bus.publish({"type": "capability_consumed", "data": {"name": name, "action": "apply", "accepted": bool(applied)}})
+                    self._mark_consumed(name)
             except Exception:
                 pass
             return applied
