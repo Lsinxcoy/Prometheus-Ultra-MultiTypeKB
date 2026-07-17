@@ -2914,7 +2914,7 @@ class Omega:
             else:
                 # 内容级兜底: 即使 source=web, 也能识别论文/代码
                 low = (content or "").lower()
-                if "arxiv.org" in low or re.search(r"\d{4}\.\d{4,5}", low):
+                if "arxiv.org" in low or _re.search(r"\d{4}\.\d{4,5}", low):
                     ntype = NodeType.PAPER
                     rails.append("rail_t4")
                 elif "github.com" in low or "def " in low and "import " in low:
