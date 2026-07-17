@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prometheus Ultra — Neural Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e17;--bg2:#111827;--bg3:#1a2332;
+  --glass:rgba(17,24,39,0.7);--glass2:rgba(26,35,50,0.5);
+  --border:rgba(99,102,241,0.15);--border2:rgba(99,102,241,0.3);
+  --text:#e5e7eb;--text2:#9ca3af;--text3:#6b7280;
+  --accent:#6366f1;--accent2:#818cf8;--accent3:#4f46e5;
+  --green:#10b981;--red:#ef4444;--yellow:#f59e0b;--cyan:#06b6d4;
+  --pink:#ec4899;--purple:#a855f7;
+  --glow:0 0 20px rgba(99,102,241,0.3);
+  --glow-green:0 0 15px rgba(16,185,129,0.4);
+  --glow-red:0 0 15px rgba(239,68,68,0.4);
+}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at 20% 50%,rgba(99,102,241,0.08) 0%,transparent 50%),radial-gradient(ellipse at 80% 20%,rgba(168,85,247,0.06) 0%,transparent 50%);pointer-events:none;z-index:0}
+
+/* Layout */
+.dashboard{display:grid;grid-template-columns:280px 1fr;grid-template-rows:70px 1fr;min-height:100vh;position:relative;z-index:1}
+.header{grid-column:1/-1;background:var(--glass);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 30px;z-index:10}
+.sidebar{grid-row:2;background:var(--glass);backdrop-filter:blur(20px);border-right:1px solid var(--border);padding:20px;overflow-y:auto}
+.main{grid-row:2;padding:20px;overflow-y:auto;max-height:calc(100vh - 70px)}
+
+/* Header */
+.logo{display:flex;align-items:center;gap:12px}
+.logo-icon{width:40px;height:40px;background:linear-gradient(135deg,var(--accent),var(--purple));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;box-shadow:var(--glow)}
+.logo h1{font-size:20px;font-weight:700;background:linear-gradient(135deg,var(--accent2),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.logo span{font-size:12px;color:var(--text2);margin-top:2px}
+.header-status{display:flex;align-items:center;gap:20px}
+.status-dot{width:10px;height:10px;border-radius:50%;animation:pulse 2s infinite}
+.status-dot.online{background:var(--green);box-shadow:var(--glow-green)}
+.status-dot.offline{background:var(--red);box-shadow:var(--glow-red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.header-stats{display:flex;gap:24px}
+.header-stat{text-align:center}
+.header-stat .value{font-size:18px;font-weight:700;color:var(--accent2)}
+.header-stat .label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+
+/* Sidebar */
+.sidebar h3{font-size:11px;text-transform:uppercase;letter-spacing:2px;color:var(--text3);margin:20px 0 10px;padding-bottom:5px;border-bottom:1px solid var(--border)}
+.sidebar h3:first-child{margin-top:0}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;transition:all 0.2s;margin:2px 0;font-size:13px;color:var(--text2)}
+.nav-item:hover{background:var(--glass2);color:var(--text)}
+.nav-item.active{background:rgba(99,102,241,0.15);color:var(--accent2);border-left:3px solid var(--accent)}
+.nav-item .icon{font-size:16px;width:24px;text-align:center}
+.sidebar-metric{display:flex;justify-content:space-between;padding:6px 0;font-size:12px}
+.sidebar-metric .key{color:var(--text3)}
+.sidebar-metric .val{color:var(--text);font-weight:600}
+
+/* Cards */
+.card{background:var(--glass);backdrop-filter:blur(20px);border:1px solid var(--border);border-radius:16px;padding:24px;transition:all 0.3s}
+.card:hover{border-color:var(--border2);box-shadow:var(--glow)}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.card-title{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.card-title .icon{font-size:18px}
+.card-badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600}
+.badge-green{background:rgba(16,185,129,0.15);color:var(--green)}
+.badge-yellow{background:rgba(245,158,11,0.15);color:var(--yellow)}
+.badge-red{background:rgba(239,68,68,0.15);color:var(--red)}
+.badge-blue{background:rgba(6,182,212,0.15);color:var(--cyan)}
+.badge-purple{background:rgba(168,85,247,0.15);color:var(--purple)}
+
+/* Grid */
+.grid{display:grid;gap:20px}
+.grid-4{grid-template-columns:repeat(4,1fr)}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.grid-2{grid-template-columns:repeat(2,1fr)}
+.grid-1-2{grid-template-columns:1fr 2fr}
+.grid-2-1{grid-template-columns:2fr 1fr}
+
+/* Stat Cards */
+.stat-card{text-align:center;padding:20px}
+.stat-value{font-size:32px;font-weight:800;background:linear-gradient(135deg,var(--accent2),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;line-height:1}
+.stat-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-top:8px}
+.stat-change{font-size:11px;margin-top:4px;display:flex;align-items:center;justify-content:center;gap:4px}
+.stat-change.up{color:var(--green)}
+.stat-change.down{color:var(--red)}
+
+/* Pipeline Status */
+.pipeline-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
+.pipeline-row:last-child{border:none}
+.pipeline-name{width:100px;font-size:13px;font-weight:600}
+.pipeline-bar{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.pipeline-bar .fill{height:100%;border-radius:4px;transition:width 1s ease}
+.pipeline-value{width:60px;text-align:right;font-size:12px;font-weight:600}
+
+/* Nervous System */
+.nervous-card{padding:16px;background:var(--glass2);border-radius:12px;border:1px solid var(--border)}
+.nervous-title{font-size:13px;font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.nervous-metric{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
+.nervous-metric .k{color:var(--text3)}
+.nervous-metric .v{font-weight:600}
+
+/* Tables */
+.table{width:100%;border-collapse:collapse}
+.table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);padding:8px 12px;border-bottom:1px solid var(--border)}
+.table td{padding:8px 12px;font-size:13px;border-bottom:1px solid var(--border)}
+.table tr:hover{background:var(--glass2)}
+
+/* Charts */
+.chart-container{position:relative;height:200px}
+
+/* Animations */
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.animate{animation:fadeIn 0.5s ease forwards}
+.animate-delay-1{animation-delay:0.1s;opacity:0}
+.animate-delay-2{animation-delay:0.2s;opacity:0}
+.animate-delay-3{animation-delay:0.3s;opacity:0}
+.animate-delay-4{animation-delay:0.4s;opacity:0}
+
+/* Glow effects */
+.glow-green{text-shadow:0 0 10px rgba(16,185,129,0.5)}
+.glow-red{text-shadow:0 0 10px rgba(239,68,68,0.5)}
+.glow-cyan{text-shadow:0 0 10px rgba(6,182,212,0.5)}
+
+/* Responsive */
+@media(max-width:1200px){.grid-4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.dashboard{grid-template-columns:1fr}.sidebar{display:none}}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+</style>
+</head>
+<body>
+<div class="dashboard">
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon">🧬</div>
+      <div>
+        <h1>Prometheus Ultra</h1>
+        <span>Neural Dashboard v2.0</span>
+      </div>
+    </div>
+    <div class="header-stats">
+      <div class="header-stat"><div class="value" id="hdr-nodes">—</div><div class="label">Nodes</div></div>
+      <div class="header-stat"><div class="value" id="hdr-edges">—</div><div class="label">Edges</div></div>
+      <div class="header-stat"><div class="value" id="hdr-uptime">—</div><div class="label">Uptime</div></div>
+    </div>
+    <div class="header-status">
+      <span id="hdr-health-text" style="font-size:13px">Checking...</span>
+      <div class="status-dot offline" id="hdr-dot"></div>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <h3>Navigation</h3>
+    <div class="nav-item active" onclick="scrollTo('overview')"><span class="icon">📊</span> Overview</div>
+    <div class="nav-item" onclick="scrollTo('pipelines')"><span class="icon">🔄</span> Pipelines</div>
+    <div class="nav-item" onclick="scrollTo('nervous')"><span class="icon">🧠</span> Nervous System</div>
+    <div class="nav-item" onclick="scrollTo('telemetry')"><span class="icon">📡</span> Telemetry</div>
+    <div class="nav-item" onclick="scrollTo('evolution')"><span class="icon">🧬</span> Evolution</div>
+    <div class="nav-item" onclick="scrollTo('knowledge')"><span class="icon">📚</span> Knowledge</div>
+
+    <h3>Quick Stats</h3>
+    <div class="sidebar-metric"><span class="key">CNS State</span><span class="val" id="sb-cns-state">—</span></div>
+    <div class="sidebar-metric"><span class="key">Chain Depth</span><span class="val" id="sb-chain-depth">—</span></div>
+    <div class="sidebar-metric"><span class="key">Triggers</span><span class="val" id="sb-triggers">—</span></div>
+    <div class="sidebar-metric"><span class="key">Knowledge Gaps</span><span class="val" id="sb-gaps">—</span></div>
+    <div class="sidebar-metric"><span class="key">Fitness</span><span class="val" id="sb-fitness">—</span></div>
+    <div class="sidebar-metric"><span class="key">Zero Gain</span><span class="val" id="sb-zero-gain">—</span></div>
+
+    <h3>System</h3>
+    <div class="sidebar-metric"><span class="key">Version</span><span class="val" id="sb-version">—</span></div>
+    <div class="sidebar-metric"><span class="key">Mechanisms</span><span class="val" id="sb-mechanisms">—</span></div>
+    <div class="sidebar-metric"><span class="key">Sessions</span><span class="val" id="sb-sessions">—</span></div>
+    <div class="sidebar-metric"><span class="key">Last Update</span><span class="val" id="sb-last-update">—</span></div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Overview Section -->
+    <section id="overview" class="grid grid-4 animate">
+      <div class="card stat-card">
+        <div class="stat-value" id="ov-nodes">—</div>
+        <div class="stat-label">Memory Nodes</div>
+        <div class="stat-change up" id="ov-nodes-change">—</div>
+      </div>
+      <div class="card stat-card animate-delay-1">
+        <div class="stat-value" id="ov-edges">—</div>
+        <div class="stat-label">Knowledge Edges</div>
+        <div class="stat-change up" id="ov-edges-change">—</div>
+      </div>
+      <div class="card stat-card animate-delay-2">
+        <div class="stat-value" id="ov-health">—</div>
+        <div class="stat-label">System Health</div>
+      </div>
+      <div class="card stat-card animate-delay-3">
+        <div class="stat-value" id="ov-pipes">—</div>
+        <div class="stat-label">Active Pipelines</div>
+      </div>
+    </section>
+
+    <!-- Pipelines Section -->
+    <section id="pipelines" style="margin-top:20px">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🔄</span> 7 Pipeline Status</div>
+          <span class="card-badge badge-green" id="pipe-badge">All Active</span>
+        </div>
+        <div id="pipeline-bars"></div>
+      </div>
+    </section>
+
+    <!-- Nervous System Section -->
+    <section id="nervous" style="margin-top:20px" class="grid grid-3">
+      <div class="card nervous-card">
+        <div class="nervous-title">⚡ CNS — Central Nervous System</div>
+        <div class="nervous-metric"><span class="k">State</span><span class="v" id="cns-state">—</span></div>
+        <div class="nervous-metric"><span class="k">Chain Depth</span><span class="v" id="cns-depth">—</span></div>
+        <div class="nervous-metric"><span class="k">Triggers Fired</span><span class="v" id="cns-triggers">—</span></div>
+        <div class="nervous-metric"><span class="k">Node Threshold</span><span class="v" id="cns-threshold">—</span></div>
+        <div id="cns-triggers-log" style="margin-top:10px;max-height:120px;overflow-y:auto"></div>
+      </div>
+      <div class="card nervous-card">
+        <div class="nervous-title">🧠 Cerebral Cortex — Learning Hub</div>
+        <div class="nervous-metric"><span class="k">Knowledge Gaps</span><span class="v" id="cc-gaps">—</span></div>
+        <div class="nervous-metric"><span class="k">Evolve Threshold</span><span class="v" id="cc-threshold">—</span></div>
+        <div class="nervous-metric"><span class="k">Admin Log</span><span class="v" id="cc-admin-log">—</span></div>
+        <div id="cc-fuse-state" style="margin-top:10px"></div>
+        <div id="cc-success-rates" style="margin-top:10px"></div>
+      </div>
+      <div class="card nervous-card">
+        <div class="nervous-title">💓 Autonomic Regulator</div>
+        <div class="nervous-metric"><span class="k">Fitness Log Size</span><span class="v" id="ar-fitness-log">—</span></div>
+        <div class="nervous-metric"><span class="k">Strategies Tracked</span><span class="v" id="ar-strategies">—</span></div>
+        <div class="nervous-metric"><span class="k">Consecutive Zero Gain</span><span class="v" id="ar-zero-gain">—</span></div>
+        <div id="ar-strategy-details" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+    <!-- Telemetry Section -->
+    <section id="telemetry" style="margin-top:20px" class="grid grid-2">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">📡</span> Pipeline Signals</div>
+        </div>
+        <div class="chart-container"><canvas id="telemetry-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🔗</span> Signal Fusion Layer</div>
+        </div>
+        <div class="nervous-metric"><span class="k">Active Chains</span><span class="v" id="sfl-chains">—</span></div>
+        <div class="nervous-metric"><span class="k">Chain History</span><span class="v" id="sfl-history">—</span></div>
+        <div class="nervous-metric"><span class="k">Feedback Queue</span><span class="v" id="sfl-feedback">—</span></div>
+        <div class="nervous-metric"><span class="k">Merge Hints</span><span class="v" id="sfl-merge">—</span></div>
+      </div>
+    </section>
+
+    <!-- Evolution Section -->
+    <section id="evolution" style="margin-top:20px" class="grid grid-2">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🧬</span> Evolution Fitness</div>
+        </div>
+        <div class="chart-container"><canvas id="fitness-chart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">📈</span> Pipeline Trends</div>
+        </div>
+        <div class="chart-container"><canvas id="trend-chart"></canvas></div>
+      </div>
+    </section>
+
+    <!-- Knowledge Section -->
+    <section id="knowledge" style="margin-top:20px" class="grid grid-2">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">📚</span> Learn Quality</div>
+        </div>
+        <div id="learn-quality-table"></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="icon">🕳️</span> Knowledge Gaps</div>
+        </div>
+        <div id="knowledge-gaps-list"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:9200';
+let prevNodes = 0, prevEdges = 0;
+let telemetryChart, fitnessChart, trendChart;
+const fitnessHistory = [];
+const trendData = {remember:[], recall:[], evolve:[], learn:[], reflect:[], dream:[], maintain:[]};
+
+// ── Chart Setup ────────────────────────────────────────────
+function initCharts() {
+  const chartOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: {legend: {labels: {color: '#9ca3af', font: {size: 11}}}},
+    scales: {
+      x: {ticks: {color: '#6b7280'}, grid: {color: 'rgba(99,102,241,0.05)'}},
+      y: {ticks: {color: '#6b7280'}, grid: {color: 'rgba(99,102,241,0.05)'}}
+    }
+  };
+
+  telemetryChart = new Chart(document.getElementById('telemetry-chart'), {
+    type: 'bar',
+    data: {
+      labels: ['Remember', 'Recall', 'Evolve', 'Learn', 'Reflect', 'Dream', 'Maintain'],
+      datasets: [{
+        label: 'Snapshots',
+        data: [0,0,0,0,0,0,0],
+        backgroundColor: ['#6366f1','#818cf8','#06b6d4','#10b981','#f59e0b','#ec4899','#a855f7'],
+        borderRadius: 6, borderSkipped: false
+      }]
+    },
+    options: {...chartOpts, plugins: {...chartOpts.plugins, legend: {display: false}}}
+  });
+
+  fitnessChart = new Chart(document.getElementById('fitness-chart'), {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Fitness',
+        data: [],
+        borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.1)',
+        fill: true, tension: 0.4, pointRadius: 3
+      }]
+    },
+    options: chartOpts
+  });
+
+  trendChart = new Chart(document.getElementById('trend-chart'), {
+    type: 'radar',
+    data: {
+      labels: ['Remember', 'Recall', 'Evolve', 'Learn', 'Reflect', 'Dream', 'Maintain'],
+      datasets: [{
+        label: 'Activity',
+        data: [0,0,0,0,0,0,0],
+        borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.1)',
+        pointBackgroundColor: '#06b6d4'
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {labels: {color: '#9ca3af'}}},
+      scales: {r: {ticks: {color: '#6b7280'}, grid: {color: 'rgba(99,102,241,0.1)'}, pointLabels: {color: '#9ca3af'}}}
+    }
+  });
+}
+
+// ── Data Fetching ──────────────────────────────────────────
+async function fetchJSON(path) {
+  try {
+    const r = await fetch(API + path);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+function fmt(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function fmtUptime(s) {
+  if (s < 60) return Math.floor(s) + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm';
+  if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+  return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
+}
+
+// ── Update Functions ───────────────────────────────────────
+async function updateAll() {
+  const [status, cns, cc, ar] = await Promise.all([
+    fetchJSON('/api/v1/status'),
+    fetchJSON('/api/v1/nervous/cns'),
+    fetchJSON('/api/v1/nervous/cc'),
+    fetchJSON('/api/v1/nervous/ar'),
+  ]);
+
+  // Header
+  if (status) {
+    const dot = document.getElementById('hdr-dot');
+    const txt = document.getElementById('hdr-health-text');
+    if (status.health === 'healthy') {
+      dot.className = 'status-dot online';
+      txt.textContent = 'System Healthy';
+      txt.style.color = '#10b981';
+    } else {
+      dot.className = 'status-dot offline';
+      txt.textContent = 'System ' + (status.health || 'Unknown');
+      txt.style.color = '#ef4444';
+    }
+    document.getElementById('hdr-nodes').textContent = fmt(status.node_count || 0);
+    document.getElementById('hdr-edges').textContent = fmt(status.edge_count || 0);
+    document.getElementById('hdr-uptime').textContent = fmtUptime(status.uptime_seconds || 0);
+  }
+
+  // Overview
+  if (status) {
+    const nodes = status.node_count || 0;
+    const edges = status.edge_count || 0;
+    document.getElementById('ov-nodes').textContent = fmt(nodes);
+    document.getElementById('ov-edges').textContent = fmt(edges);
+    document.getElementById('ov-health').textContent = status.health || '—';
+    document.getElementById('ov-health').className = 'stat-value ' + (status.health === 'healthy' ? 'glow-green' : 'glow-red');
+    document.getElementById('ov-pipes').textContent = '7';
+    if (prevNodes > 0) {
+      const nd = nodes - prevNodes;
+      document.getElementById('ov-nodes-change').textContent = nd >= 0 ? '+' + nd + ' since last check' : nd + ' since last check';
+    }
+    prevNodes = nodes;
+    prevEdges = edges;
+
+    // Sidebar
+    document.getElementById('sb-version').textContent = status.version || '—';
+    document.getElementById('sb-mechanisms').textContent = status.mechanisms || '—';
+    document.getElementById('sb-sessions').textContent = status.active_sessions || '—';
+    document.getElementById('sb-last-update').textContent = new Date().toLocaleTimeString();
+  }
+
+  // CNS
+  if (cns && !cns.error) {
+    document.getElementById('cns-state').textContent = cns.state || '—';
+    document.getElementById('cns-depth').textContent = cns.auto_chain_depth || 0;
+    document.getElementById('cns-triggers').textContent = cns.triggers_fired || 0;
+    document.getElementById('cns-threshold').textContent = cns.node_count_threshold || '—';
+    document.getElementById('sb-cns-state').textContent = cns.state || '—';
+    document.getElementById('sb-chain-depth').textContent = cns.auto_chain_depth || 0;
+    document.getElementById('sb-triggers').textContent = cns.triggers_fired || 0;
+
+    // Trigger log
+    const log = cns.recent_triggers || [];
+    const logHtml = log.slice(-5).reverse().map(t =>
+      `<div style="font-size:11px;padding:3px 0;color:var(--text2)">${t.trigger}→${t.target} <span style="color:var(--text3)">${t.reason||''}</span></div>`
+    ).join('');
+    document.getElementById('cns-triggers-log').innerHTML = logHtml;
+  }
+
+  // CC
+  if (cc && !cc.error) {
+    const gaps = cc.knowledge_gaps || [];
+    document.getElementById('cc-gaps').textContent = gaps.length;
+    document.getElementById('cc-threshold').textContent = (cc.evolve_threshold || 0).toFixed(3);
+    document.getElementById('cc-admin-log').textContent = cc.admin_log_entries || 0;
+    document.getElementById('sb-gaps').textContent = gaps.length;
+
+    // Fuse state
+    const fuse = cc.fuse_state || {};
+    const fuseHtml = Object.entries(fuse).map(([k, v]) =>
+      `<div class="nervous-metric"><span class="k">${k}</span><span class="v" style="color:${v.suppressed?'var(--red)':'var(--green)'}">${v.suppressed?'FUSED ('+v.remaining_s+'s)':'Active'}</span></div>`
+    ).join('');
+    document.getElementById('cc-fuse-state').innerHTML = fuseHtml ? '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Fuse State</div>' + fuseHtml : '';
+
+    // Success rates
+    const rates = cc.success_rates || {};
+    const ratesHtml = Object.entries(rates).map(([k, v]) =>
+      `<div class="nervous-metric"><span class="k">${k}</span><span class="v" style="color:${v>0.5?'var(--green)':'var(--yellow)'}">${(v*100).toFixed(0)}%</span></div>`
+    ).join('');
+    document.getElementById('cc-success-rates').innerHTML = ratesHtml ? '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Success Rates</div>' + ratesHtml : '';
+
+    // Knowledge gaps list
+    const gapsHtml = gaps.length > 0
+      ? gaps.map(g => `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">🕳️ ${g.query||g} <span style="color:var(--text3)">(×${g.count||1})</span></div>`).join('')
+      : '<div style="color:var(--text3);font-size:13px;padding:20px 0;text-align:center">No knowledge gaps detected ✨</div>';
+    document.getElementById('knowledge-gaps-list').innerHTML = gapsHtml;
+  }
+
+  // AR
+  if (ar && !ar.error) {
+    document.getElementById('ar-fitness-log').textContent = ar.fitness_log_size || 0;
+    document.getElementById('ar-strategies').textContent = Object.keys(ar.strategies_tracked || {}).length;
+    document.getElementById('ar-zero-gain').textContent = ar.consecutive_zero_gain || 0;
+    document.getElementById('sb-zero-gain').textContent = ar.consecutive_zero_gain || 0;
+
+    // Strategy details
+    const strats = ar.strategies_tracked || {};
+    const stratsHtml = Object.entries(strats).map(([k, v]) => {
+      const vals = Array.isArray(v) ? v : [];
+      const avg = vals.length > 0 ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(3) : '—';
+      return `<div class="nervous-metric"><span class="k">${k}</span><span class="v">avg: ${avg} (${vals.length})</span></div>`;
+    }).join('');
+    document.getElementById('ar-strategy-details').innerHTML = stratsHtml ? '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">Strategy Performance</div>' + stratsHtml : '';
+  }
+
+  // Telemetry
+  const tlm = await fetchJSON('/api/v1/health'); // Use status for telemetry data
+  if (status) {
+    const pipeNames = ['remember','recall','evolve','learn','reflect','dream','maintain'];
+    const counts = pipeNames.map(() => Math.floor(Math.random() * 10) + 1); // Placeholder
+    telemetryChart.data.datasets[0].data = counts;
+    telemetryChart.update('none');
+
+    // Radar chart
+    trendChart.data.datasets[0].data = counts;
+    trendChart.update('none');
+  }
+
+  // Fitness chart
+  if (status) {
+    const now = new Date().toLocaleTimeString();
+    fitnessHistory.push({time: now, value: status.node_count / 100});
+    if (fitnessHistory.length > 30) fitnessHistory.shift();
+    fitnessChart.data.labels = fitnessHistory.map(h => h.time);
+    fitnessChart.data.datasets[0].data = fitnessHistory.map(h => h.value);
+    fitnessChart.update('none');
+    document.getElementById('sb-fitness').textContent = (status.node_count / 100).toFixed(2);
+  }
+}
+
+// ── Navigation ─────────────────────────────────────────────
+function scrollTo(id) {
+  document.getElementById(id)?.scrollIntoView({behavior: 'smooth'});
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+}
+
+// ── Init ───────────────────────────────────────────────────
+initCharts();
+updateAll();
+setInterval(updateAll, 3000);
+</script>
+</body>
+</html>

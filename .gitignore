@@ -1,0 +1,22 @@
+# 散落根目录的调试/临时脚本（非正式测试，保留在磁盘但不入版本库）
+debug_*.py
+test_*.py
+knowledge_graph.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 环境/IDE
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+
+# 运行时产物
+*.db
+*.db-shm
+*.db-wal
+*.json
+.coverage
