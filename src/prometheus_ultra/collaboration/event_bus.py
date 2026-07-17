@@ -119,7 +119,18 @@ class CIPEventBus:
             topic = event.get("type", "general")
         if event is None:
             event = {}
-        
+
+        # 防腐扁平化 (A1 教训): 部分 publish 误将业务字段嵌套进二级
+        #   {"type": "x_completed", "data": {"field": v}} —— 总线会把整个
+        #   event 包进 enriched_event["data"]，导致 Telemetry/订阅者从
+        #   event.data.field 读取时落到 event.data.data.field (静默 None)。
+        #   此处自动把二级 data 的字段提升到顶层，兼容正确写法
+        #   (字段已在顶层) 与错误嵌套写法，二者皆可被正确解析。
+        if isinstance(event, dict) and isinstance(event.get("data"), dict) \
+                and set(event.keys()) <= {"type", "data"}:
+            nested = event.pop("data")
+            event.update(nested)
+
         event_id = hashlib.md5(f"{topic}:{time.time()}:{event}".encode()).hexdigest()[:12]
         
         enriched_event = {
