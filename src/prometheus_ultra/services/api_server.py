@@ -170,7 +170,7 @@ class UltraAPIServer:
 
         @app.get("/dashboard")
         def dashboard():
-            """Serve the neural dashboard HTML."""
+            """Serve the advanced neural dashboard HTML."""
             import os
             html_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
             if os.path.exists(html_path):
@@ -178,6 +178,20 @@ class UltraAPIServer:
                 with open(html_path, 'r', encoding='utf-8') as f:
                     return HTMLResponse(content=f.read())
             return {"error": "Dashboard not found"}
+
+        @app.get("/api/v1/dashboard/static/{filename}")
+        def dashboard_static(filename: str):
+            """Serve dashboard static assets (css/js)."""
+            import os
+            static_dir = os.path.join(os.path.dirname(__file__), "dashboard_static")
+            safe = os.path.basename(filename)
+            path = os.path.join(static_dir, safe)
+            if not os.path.exists(path):
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=404, content={"error": "not found"})
+            from fastapi.responses import FileResponse
+            ctype = "text/css" if safe.endswith(".css") else "application/javascript"
+            return FileResponse(path, media_type=ctype)
 
         @app.get("/api/v1/status")
         def status():
@@ -687,6 +701,106 @@ class UltraAPIServer:
                 )
             except Exception as e:
                 return PipelineResponse(success=False, pipeline="utility", error=str(e))
+
+        @app.get("/api/v1/dashboard/summary", response_model=PipelineResponse)
+        def dashboard_summary():
+            """高级 Dashboard 聚合端点 — 一次性返回所有面板数据(减少前端请求)."""
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            try:
+                o = self.omega
+                summary: dict = {}
+
+                # ── 机制层 (V2.2/V2.3) ──
+                reg = o.mechanism_registry
+                mstats = reg.get_stats()
+                # 机制状态分布(active/pending/compiled/extracted)
+                status_dist = {}
+                effect_list = []
+                for nm, e in reg._mechanisms.items():
+                    st = e.get("status", "unknown")
+                    status_dist[st] = status_dist.get(st, 0) + 1
+                    if e.get("effect_mean") is not None:
+                        effect_list.append({"name": nm, "effect": round(e["effect_mean"], 3)})
+                summary["mechanisms"] = {
+                    "total": mstats.get("registered", 0),
+                    "enabled": mstats.get("enabled", 0),
+                    "status_dist": status_dist,
+                    "superposed": reg.get_superposed_names(),
+                    "prune_candidates": len(reg.get_prune_candidates()),
+                    "top_effects": sorted(effect_list, key=lambda x: x["effect"])[:10],
+                }
+
+                # ── 进化层 (T1-T4 + chain) ──
+                ev_stats = {}
+                try:
+                    ev_stats = o.evolution_engine.get_stats()
+                except Exception:
+                    pass
+                summary["evolution"] = {
+                    "engine_stats": ev_stats,
+                    "last_chain": o._telemetry.get("evolve") if hasattr(o, "_telemetry") else None,
+                    "gene_specs": len(getattr(o.evolution_engine, "_gene_specs", {})),
+                }
+
+                # ── 记忆层 (utility + 节点类型分布) ──
+                node_count = 0
+                try:
+                    node_count = o.store.get_node_count()
+                except Exception:
+                    pass
+                util_global = 0.5
+                type_dist = {}
+                try:
+                    avgs = o.utility_tracker.get_all_averages()
+                    util_global = sum(avgs.values()) / len(avgs) if avgs else 0.5
+                    # 节点类型分布
+                    from prometheus_ultra.foundation.schema import NodeType
+                    for nt in NodeType:
+                        try:
+                            cnt = len(o.store.get_nodes_by_type(nt, limit=100000))
+                            if cnt > 0:
+                                type_dist[nt.value] = cnt
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+                summary["memory"] = {
+                    "node_count": node_count,
+                    "global_utility": round(util_global, 4),
+                    "type_distribution": type_dist,
+                }
+
+                # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
+                host_id = "none"
+                try:
+                    host_id = getattr(o.host, "host_id", "none")
+                except Exception:
+                    pass
+                summary["agents"] = {
+                    "active_host": host_id,
+                    "adapter_type": type(o.host).__name__ if hasattr(o, "host") else "none",
+                }
+
+                # ── 论文借力映射 (V2.3/V2.4 六篇) ──
+                summary["papers"] = [
+                    {"arxiv": "2505.18605", "title": "Rethink Causal Mask Attention for VL",
+                     "ultra": "recall future-aware", "rating": "PARTIAL", "ver": "V2.4 P1-a"},
+                    {"arxiv": "2606.23885", "title": "Modality-Mutual Attention (HeRA)",
+                     "ultra": "跨NodeType拓扑对齐", "rating": "PARTIAL", "ver": "V2.4 P1-c"},
+                    {"arxiv": "2506.07851", "title": "Learning to Focus (Grad Token Pruning)",
+                     "ultra": "机制主动剪枝", "rating": "MATCH", "ver": "V2.3 P0-a"},
+                    {"arxiv": "2501.12004", "title": "Overlapped-Frame Fusion (Speech)",
+                     "ultra": "时间邻域融合", "rating": "PARTIAL", "ver": "V2.4b P1-d"},
+                    {"arxiv": "2505.14684", "title": "Mind the Gap (Thought Leap)",
+                     "ultra": "evolve链完整性", "rating": "MATCH", "ver": "V2.3 P0-b"},
+                    {"arxiv": "2604.06374", "title": "Reasoning by Superposition",
+                     "ultra": "机制叠加态候选", "rating": "MATCH", "ver": "V2.4 P1-b"},
+                ]
+
+                return PipelineResponse(success=True, pipeline="dashboard_summary", data=summary)
+            except Exception as e:
+                return PipelineResponse(success=False, pipeline="dashboard_summary", error=str(e))
 
         @app.on_event("startup")
         def startup():
