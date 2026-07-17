@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from prometheus_ultra.integration.host_agent import GenericAgentAdapter, HostAgentAdapter
 from prometheus_ultra.life import Omega
 from prometheus_ultra.foundation.schema import NodeType
+from prometheus_ultra.loop.info_gain import InfoGainCalculator
 
 
 def test_mark_consumed_writes_registry():
@@ -106,3 +107,45 @@ def test_load_applied_surfaces_malformed_record(caplog, tmp_path):
     # 腐蚀记录触发告警且不崩(修复前 except:pass 无声吞掉 -> 重启后 pending 重报机制)
     assert any("损坏的 applied 记录" in r.message for r in caplog.records), \
         "腐蚀 applied 记录应触发告警, 但无任何日志(静默丢失未修复)"
+
+
+# ===== cycle4: InfoGainCalculator.record_gain / diminishing_returns 未实现方法修复 =====
+def test_record_gain_stores_history():
+    """record_gain 真实落地: 累积历史(此前是 return float(value) 的 no-op, 历史永不增长)。"""
+    ig = InfoGainCalculator()
+    assert ig._gains == []
+    ret = ig.record_gain("reflect", 0.42)
+    assert ret == 0.42            # 兼容别名: 原样返回
+    ig.record_gain("reflect", 0.3)
+    assert len(ig._gains) == 2
+    assert ig._gains == [0.42, 0.3]
+
+
+def test_diminishing_returns_false_without_history():
+    """样本不足时仍返回 False(保留安全默认, 不崩、不误报)。"""
+    ig = InfoGainCalculator()
+    assert ig.diminishing_returns() is False
+
+
+def test_diminishing_returns_detects_clear_diminishing():
+    """增益明显边际递减时返回 True(此前恒返回 False, 永远检测不到)。"""
+    ig = InfoGainCalculator()
+    for v in [1.0, 0.9, 0.8, 0.1, 0.05, 0.02]:
+        ig.record_gain("reflect", v)
+    assert ig.diminishing_returns() is True
+
+
+def test_diminishing_returns_false_when_increasing():
+    """增益持续上升时不误报递减(近期均值 > 前期均值)。"""
+    ig = InfoGainCalculator()
+    for v in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]:
+        ig.record_gain("reflect", v)
+    assert ig.diminishing_returns() is False
+
+
+def test_diminishing_returns_no_args_callable_like_life():
+    """life.py 以无参方式调用 diminishing_returns(), 签名须保持兼容且平稳时返回 False。"""
+    ig = InfoGainCalculator()
+    for v in [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]:
+        ig.record_gain("reflect", v)
+    assert ig.diminishing_returns() is False

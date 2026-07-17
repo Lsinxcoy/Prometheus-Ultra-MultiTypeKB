@@ -42,6 +42,8 @@ class InfoGainCalculator:
             smoothing: 平滑因子,防止log(0)
         """
         self._smoothing = smoothing
+        # 信息增益历史(供 record_gain / diminishing_returns 做边际递减检测)
+        self._gains: list[float] = []
     
     def entropy(self, values: list) -> float:
         """计算香农熵.
@@ -168,24 +170,44 @@ class InfoGainCalculator:
     
     # 兼容别名: life.py 调用 record_gain()
     def record_gain(self, source: str = "", value: float = 0.0) -> float:
-        """记录信息增益 (兼容别名).
-        
+        """记录信息增益(真实落地: 追加进历史, 供 diminishing_returns 检测边际递减).
+
         Args:
             source: 来源标签
             value: 增益值
-        
+
         Returns:
-            float: 记录的增益值
+            float: 记录的增益值(原样返回, 保持兼容)
         """
-        return float(value)
+        v = float(value)
+        self._gains.append(v)
+        if len(self._gains) > 1000:  # 防止无限增长
+            self._gains = self._gains[-500:]
+        return v
     
-    def diminishing_returns(self) -> bool:
-        """检测是否存在边际递减.
-        
+    def diminishing_returns(self, window: int = 3, ratio: float = 0.6) -> bool:
+        """检测是否存在边际递减(基于 record_gain 累积的历史).
+
+        比较最近 window 个增益均值与之前 window 个增益均值:
+        若 近期均值 < 前期均值 * ratio, 判定为边际递减。
+
+        Args:
+            window: 每侧对比窗口大小(样本数)
+            ratio: 近期/前期均值比阈值, 低于此值判定递减
+
         Returns:
-            bool: 是否处于边际递减状态
+            bool: 是否处于边际递减状态(样本不足时返回 False)
         """
-        return False  # 无历史数据,默认不递减
+        g = self._gains
+        if len(g) < 2 * window:
+            return False  # 样本不足, 默认不递减
+        recent = g[-window:]
+        prior = g[-2 * window:-window]
+        prior_mean = sum(prior) / len(prior)
+        if prior_mean <= 0:
+            return False
+        recent_mean = sum(recent) / len(recent)
+        return recent_mean < prior_mean * ratio
 
 
 # 兼容别名
