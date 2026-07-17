@@ -27,7 +27,8 @@ class TestSubscribe:
         bus = MagicMock()
         sfl = SignalFusionLayer(omega)
         sfl.subscribe(bus)
-        assert bus.subscribe.call_count == 7
+        # Should subscribe to all 8 pipe events (7 + rumination)
+        assert bus.subscribe.call_count == 8
 
     def test_subscribe_no_method(self):
         omega = MagicMock()

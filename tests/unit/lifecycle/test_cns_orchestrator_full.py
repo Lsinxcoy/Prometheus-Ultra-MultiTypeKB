@@ -50,8 +50,8 @@ class TestSubscribe:
         bus = MagicMock()
         orchestrator = CNSOrchestrator(omega)
         orchestrator.subscribe(bus)
-        # Should subscribe to all 7 pipeline events
-        assert bus.subscribe.call_count == 7
+        # Should subscribe to all 8 pipeline events (7 + rumination_completed)
+        assert bus.subscribe.call_count == 8
 
     def test_subscribe_no_subscribe_method(self):
         omega = MagicMock()
@@ -457,6 +457,8 @@ class TestOnEvolve:
     def test_on_evolve_positive_delta_triggers_dream(self):
         omega = MagicMock()
         omega.cache.cleanup_expired = MagicMock()
+        # C1 质量门: 无审议信号(consensus=None) 应放行
+        omega.signal_fusion.signal.return_value = None
         orchestrator = CNSOrchestrator(omega)
         orchestrator._can_trigger = MagicMock(return_value=True)
         orchestrator._on_evolve({"data": {"fitness_before": 0.5, "fitness_after": 0.6}})
@@ -472,7 +474,10 @@ class TestOnEvolve:
     def test_on_evolve_cache_cleanup(self):
         omega = MagicMock()
         omega.cache.cleanup_expired = MagicMock()
+        # C1 质量门: 无审议信号(consensus=None) 应放行 → dream 触发 → cache cleanup
+        omega.signal_fusion.signal.return_value = None
         orchestrator = CNSOrchestrator(omega)
+        orchestrator._can_trigger = MagicMock(return_value=True)
         orchestrator._on_evolve({"data": {"fitness_before": 0.5, "fitness_after": 0.6}})
         assert omega.cache.cleanup_expired.called
 
