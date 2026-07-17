@@ -795,6 +795,37 @@ class MinervaStore:
                 logger.error("get_branch_nodes failed: %s", e)
                 return []
 
+    def get_temporal_neighbors(self, node_id: str, delta_t: float = 3600.0,
+                               branch: str = "main", limit: int = 5) -> list[Node]:
+        """取某节点的时间邻域(前后 delta_t 秒内的同 branch 节点) [P1-d].
+
+        论文④ Overlap Speech 借力: 因果系统在帧重叠固有延迟内浪费未来信息,
+        用伪重叠帧融合补救. 映射到 ULTRA: recall 召回孤立节点会丢失帧边界处
+        上下文, 此处融合时间邻域节点重建上下文(避免因果断点丢信息).
+        """
+        self._check_connection()
+        assert self._conn is not None
+        with self._lock:
+            try:
+                # 取该节点的 created_at
+                cur = self._conn.execute(
+                    "SELECT created_at FROM nodes WHERE id=?", (node_id,)
+                ).fetchone()
+                if cur is None:
+                    return []
+                t0 = cur[0]
+                rows = self._conn.execute(
+                    """SELECT * FROM nodes
+                       WHERE branch=? AND tx_to=0.0 AND id!=?
+                         AND created_at BETWEEN ? AND ?
+                       ORDER BY ABS(created_at - ?) ASC LIMIT ?""",
+                    (branch, node_id, t0 - delta_t, t0 + delta_t, t0, limit),
+                ).fetchall()
+                return [self._row_to_node(r) for r in rows]
+            except sqlite3.Error as e:
+                logger.error("get_temporal_neighbors failed: %s", e)
+                return []
+
     # ============================================================
     # Branch Operations
     # ============================================================

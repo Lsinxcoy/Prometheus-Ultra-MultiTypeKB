@@ -111,3 +111,41 @@ class TestP1cTopology:
             os.remove(db)
         except Exception:
             pass
+
+
+class TestP1dTemporalFusion:
+    def test_temporal_neighbor_fusion(self):
+        """P1-d (论文④ Overlap Speech): recall top 节点融合其时间邻域, 重建上下文."""
+        from prometheus_ultra.life import Omega
+        from prometheus_ultra.foundation.schema import Node, NodeType
+        db = os.path.join(tempfile.gettempdir(), f"ultra_p1d_{os.getpid()}_{id(object())}.db")
+        o = Omega(db_path=db)
+        try:
+            o.ada_mem.should_retrieve = lambda *a, **k: True
+        except Exception:
+            pass
+        now = time.time()
+        # 主节点(匹配查询) + 时间邻域节点(前后 600s, 不同内容, 不直接匹配查询)
+        main = Node(content="main topic about speech enhancement", type=NodeType.FACT,
+                    utility=0.6, created_at=now)
+        nb1 = Node(content="neighbor context frame A", type=NodeType.FACT,
+                   utility=0.4, created_at=now - 300.0)
+        nb2 = Node(content="neighbor context frame B", type=NodeType.FACT,
+                   utility=0.4, created_at=now + 300.0)
+        o.store.create_node(main)
+        o.store.create_node(nb1)
+        o.store.create_node(nb2)
+        res = o.recall("speech enhancement", limit=10)
+        hit_ids = [h.node_id for h in res.hits]
+        # 主节点召回
+        assert main.id in hit_ids
+        # 时间邻域节点应被融合召回(即使不直接匹配查询)
+        assert nb1.id in hit_ids, "时间邻域节点应被融合召回"
+        assert nb2.id in hit_ids, "时间邻域节点(未来)应被融合召回"
+        # recall_data 应记录融合数
+        assert res.metadata.get("temporal_neighbors_fused", 0) >= 2
+        o.store.close()
+        try:
+            os.remove(db)
+        except Exception:
+            pass

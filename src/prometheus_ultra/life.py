@@ -1548,6 +1548,33 @@ class Omega:
         unique.sort(key=lambda h: h.score, reverse=True)
         unique = unique[:limit]
 
+        # P1-d (论文④ Overlap Speech 借力): 时间邻域融合 (temporal neighbor fusion)
+        # 论文核心: 因果系统浪费帧重叠固有延迟内的未来信息 -> 伪重叠帧融合.
+        # 映射到 ULTRA: recall 召回孤立节点会丢失帧边界上下文, 对 top hits 融合
+        # 其时间邻域(前后 delta_t 窗口), 重建上下文(避免因果断点丢信息).
+        if unique:
+            neighbor_hits = []
+            for h in unique[:3]:  # 仅对 top-3 做邻域融合(控制开销)
+                base_id = h.node_id
+                # 去掉可能的前缀(topological/ds_ 等)还原 store node id
+                plain_id = base_id.split("_")[-1] if "_" in base_id else base_id
+                try:
+                    neighbors = self.store.get_temporal_neighbors(
+                        plain_id, delta_t=getattr(self, "temporal_fusion_window", 3600.0),
+                        branch=branch, limit=3)
+                    for nb in neighbors:
+                        if nb.id not in seen and nb.id != plain_id:
+                            seen.add(nb.id)
+                            neighbor_hits.append(SearchHit(
+                                node_id=nb.id, score=h.score * 0.6,  # 邻域降权
+                                content=nb.content, snippet=nb.content[:200],
+                                metadata={"neighbor_of": plain_id, "fusion": "temporal"}))
+                except Exception as e:
+                    logger.debug("Temporal neighbor fusion failed for %s: %s", base_id, e)
+            if neighbor_hits:
+                unique.extend(neighbor_hits)
+                recall_data["temporal_neighbors_fused"] = len(neighbor_hits)
+
         # Owner-Harm: filter results the requester can access
         if hasattr(self, 'owner_harm'):
             try:
