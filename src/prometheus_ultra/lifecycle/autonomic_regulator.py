@@ -51,6 +51,7 @@ class AutonomicRegulator:
             bus.subscribe("recall_completed", self._on_recall, priority=0.4)
             bus.subscribe("dream_completed", self._on_dream, priority=0.3)
             bus.subscribe("remember_completed", self._on_remember, priority=0.2)
+            bus.subscribe("rumination_completed", self._on_rumination, priority=0.6)
             logger.info("AutonomicRegulator subscribed to 7 event types")
 
     def _on_reflect(self, event: dict) -> None:
@@ -98,6 +99,17 @@ class AutonomicRegulator:
             _ = data.get("status", "?")
         except Exception as e:
             logger.warning("AR._on_remember: %s", e)
+
+    def _on_rumination(self, event: dict) -> None:
+        """反刍完成 → 记录知新产出到 fitness 趋势，供熔断/降级判断。"""
+        try:
+            d = event.get("data", {})
+            promoted = d.get("skills_promoted", 0) or 0
+            routed = d.get("routed_nodes", 0) or 0
+            if promoted > 0 or routed > 0:
+                self._fitness_log.append((max(0.1, 0.5 + 0.01 * promoted), time.time(), "rumination"))
+        except Exception as e:
+            logger.warning("AutonomicRegulator._on_rumination: %s", e)
 
     def _on_evolve(self, event: dict) -> None:
         """evolve 完成后——比较 fitness 变化，更新策略奖励。"""

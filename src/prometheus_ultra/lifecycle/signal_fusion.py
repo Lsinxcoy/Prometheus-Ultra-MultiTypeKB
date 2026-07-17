@@ -70,7 +70,7 @@ class SignalFusionLayer:
             logger.warning("SignalFusionLayer: bus has no subscribe method")
             return
         for suffix in ["remember", "recall", "evolve", "learn",
-                        "reflect", "dream", "maintain"]:
+                        "reflect", "dream", "maintain", "rumination"]:
             bus.subscribe(f"{suffix}_completed", self._on_pipe_event, priority=0.85)
         logger.info("SignalFusionLayer subscribed to all 7 pipe events")
 

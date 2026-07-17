@@ -102,6 +102,7 @@ class CNSOrchestrator:
         bus.subscribe("reflect_completed", self._on_reflect, priority=0.9)
         bus.subscribe("dream_completed", self._on_dream, priority=0.8)
         bus.subscribe("maintain_completed", self._on_maintain, priority=0.6)
+        bus.subscribe("rumination_completed", self._on_rumination, priority=0.7)
         logger.info("CNSOrchestrator subscribed to all 7 pipeline events")
 
     # ─────────────────────────────────────────────
@@ -179,6 +180,23 @@ class CNSOrchestrator:
                                pipeline, e)
 
         return True
+
+    def _on_rumination(self, event: dict) -> None:
+        """反刍知新产出 → 触发 maintain 巩固 (仅当确有系统级产出)。"""
+        try:
+            data = event.get("data", {})
+            skills = data.get("skills_promoted", 0) or 0
+            routed = data.get("routed_nodes", 0) or 0
+            mappings = data.get("mappings_applied", 0) or 0
+            if skills > 0 or routed > 0 or mappings > 0:
+                if self._can_trigger("maintain"):
+                    logger.info("CNS: rumination produced knowledge (skills=%d routed=%d), triggering maintain", skills, routed)
+                    try:
+                        self._omega.maintain()
+                    except Exception as e:
+                        logger.warning("CNS: rumination->maintain failed: %s", e)
+        except Exception as e:
+            logger.warning("CNS._on_rumination: %s", e)
 
     def _record_trigger(self, trigger: str, target: str, reason: str,
                         event_data: dict) -> None:

@@ -110,6 +110,9 @@ class CerebralCortex:
                         "reflect", "dream", "maintain"]:
             bus.subscribe(f"{suffix}_completed", self._on_outcome, priority=0.8)
 
+        # 反刍知新完成 → 记录 outcome（与 evolve/learn 同口径参与自适应/熔断）
+        bus.subscribe("rumination_completed", self._on_rumination, priority=0.7)
+
         # 回路 D: 监听 trigger 型事件
         bus.subscribe("reflect_completed", self._on_reflect, priority=0.9)
         bus.subscribe("dream_completed", self._on_dream, priority=0.8)
@@ -272,6 +275,18 @@ class CerebralCortex:
 
         except Exception as e:
             logger.warning("CerebralCortex._on_outcome: %s", e)
+
+    def _on_rumination(self, event: dict) -> None:
+        """反刍产出 → 记录到 outcome（与 evolve/learn 同口径参与自适应/熔断）。"""
+        try:
+            d = event.get("data", {})
+            promoted = d.get("skills_promoted", 0) or 0
+            routed = d.get("routed_nodes", 0) or 0
+            outcome = min(1.0, (promoted + routed) / 10.0)
+            fitness = self._omega._compute_fitness() if hasattr(self._omega, "_compute_fitness") else 0.5
+            self._record_outcome("rumination", fitness, outcome)
+        except Exception as e:
+            logger.warning("CerebralCortex._on_rumination: %s", e)
 
     def _record_outcome(self, trigger_type: str, fitness: float, delta: float) -> None:
         """记录 trigger 的 outcome 到历史并推送反馈。"""
