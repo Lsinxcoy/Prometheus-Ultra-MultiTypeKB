@@ -646,11 +646,16 @@ class Omega:
         from prometheus_ultra.integration.host_agent import NullHostAdapter
         from prometheus_ultra.integration.hermes_adapter import HermesAdapter
         _host_ep = os.environ.get("AGENT_LLM_ENDPOINT") or os.environ.get("HERMES_LLM_ENDPOINT")
-        # V3.1 G3: 允许注入自定义 host adapter(任意 Agent); 否则按 env 选 Hermes/Null
+        # V3.1 G3: 允许注入自定义 host adapter(任意 Agent); 否则默认 Hermes 宿主
+        # 关键修正: 宿主身份(Hermes) 独立于 LLM 可用性 — 即使无 LLM endpoint,
+        #   Ultra 仍以 Hermes 宿主身份运行(host_id 隔离/经验回灌/机制消费语义成立),
+        #   LLM bridge 内部 available=False 时 T3/T4 诚实降级(非 NullHost 丢宿主语义).
         if host is not None:
             self.host = host
         else:
-            self.host = HermesAdapter() if _host_ep else NullHostAdapter()
+            # 优先: 显式 LLM endpoint -> HermesAdapter(带 bridge)
+            # 默认: 仍 Hermes 宿主(无 LLM 时 bridge.available=False, T4 降级)
+            self.host = HermesAdapter()
         # 把宿主 LLM 也作为 T3/T4 的推理通道: 若 host 是 HermesAdapter 且带 bridge, 覆盖 env bridge
         if isinstance(self.host, HermesAdapter) and getattr(self.host, "_bridge", None) is not None:
             self.llm = self.host._bridge
