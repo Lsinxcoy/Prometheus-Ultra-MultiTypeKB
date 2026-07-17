@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 from copy import deepcopy
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ class Playbook:
     steps: list[PlaybookStep] = field(default_factory=list)
     variables: dict[str, Any] = field(default_factory=dict)
     parent_playbook_id: str | None = None  # 父Playbook ID
+    parent_resolver: Callable[[str], "Playbook | None"] | None = None  # 父 Playbook 查找器 (由 PlaybookInheritance 注入)
     tags: list[str] = field(default_factory=list)
 
     def get_step(self, step_id: str) -> PlaybookStep | None:
@@ -47,10 +48,14 @@ class Playbook:
         return None
 
     def resolve_variable(self, var_name: str) -> Any:
-        """解析变量值，优先使用本地变量，其次父Playbook变量"""
+        """解析变量值，优先使用本地变量，其次沿继承链向上查找父 Playbook 变量。"""
         if var_name in self.variables:
             return self.variables[var_name]
-        # TODO: 从父Playbook继承变量
+        # 沿继承链向上解析父 Playbook 变量 (修复: 原 TODO 未实现, 直接返回 None 导致继承变量静默丢失)
+        if self.parent_playbook_id and self.parent_resolver is not None:
+            parent = self.parent_resolver(self.parent_playbook_id)
+            if parent is not None:
+                return parent.resolve_variable(var_name)
         return None
 
 
@@ -69,6 +74,9 @@ class PlaybookInheritance:
         if playbook.playbook_id in self._playbooks:
             logger.warning("Playbook %s already registered", playbook.playbook_id)
             return False
+
+        # 注入父 Playbook 查找器, 使 resolve_variable 能沿继承链解析变量
+        playbook.parent_resolver = lambda pid: self._playbooks.get(pid)
 
         self._playbooks[playbook.playbook_id] = playbook
 
