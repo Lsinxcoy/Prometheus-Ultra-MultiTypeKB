@@ -20,7 +20,9 @@ def test_rumination_publishes_event():
     res = eng.ruminate(mode="full", force=True)
     assert any(e.get("type") == "rumination_completed" for e in published), "rumination 必须 publish rumination_completed"
     ev = [e for e in published if e.get("type")=="rumination_completed"][0]
-    assert "data" in ev and "total_scanned" in ev["data"]
+    # 真实总线(CIPEventBus.publish)会把整个 dict 包进 event["data"]，
+    # 因此真实字段在顶层(与 remember/evolve 等管道一致)。StubBus 不包层，故直接顶层断言。
+    assert "total_scanned" in ev, "rumination_completed 必须含 total_scanned 字段(顶层)"
 
 def test_cns_subscribes_rumination():
     from prometheus_ultra.lifecycle.cns_orchestrator import CNSOrchestrator
