@@ -9,6 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -50,12 +51,18 @@ class ParallelDispatcher:
         self._max_concurrent = max_concurrent
         self._dispatches: list[dict] = []
         self._batch_counter = 0
+        # 保护共享可变状态(_batch_counter 自增 与 _dispatches 追加)在并发
+        # dispatch 下不丢更新/不丢条。ParallelDispatcher 是 Omega 共享单例,
+        # 经 uvicorn 线程池可被并发进入, 无锁会导致 batch_id 碰撞、派发日志丢失。
+        # 仅锁住极小临界区, 不锁线程池执行区间, 保持并行度。
+        self._lock = threading.Lock()
 
     def dispatch(self, tasks: list[dict], batch_id: str = "",
                  task_handler=None) -> DispatchResult:
         if not batch_id:
-            self._batch_counter += 1
-            batch_id = "batch_%d" % self._batch_counter
+            with self._lock:
+                self._batch_counter += 1
+                batch_id = "batch_%d" % self._batch_counter
 
         start_time = time.time()
         result = DispatchResult(batch_id=batch_id)
@@ -101,12 +108,13 @@ class ParallelDispatcher:
         result.total_duration_ms = (time.time() - start_time) * 1000
         result.merged_results = self._merge_results(subagent_tasks)
 
-        self._dispatches.append({
-            "batch_id": batch_id,
-            "tasks": len(subagent_tasks),
-            "completed": result.completed,
-            "failed": result.failed,
-        })
+        with self._lock:
+            self._dispatches.append({
+                "batch_id": batch_id,
+                "tasks": len(subagent_tasks),
+                "completed": result.completed,
+                "failed": result.failed,
+            })
 
         return result
 
@@ -121,4 +129,5 @@ class ParallelDispatcher:
         return merged
 
     def get_stats(self) -> dict:
-        return {"dispatches": len(self._dispatches)}
+        with self._lock:
+            return {"dispatches": len(self._dispatches)}
