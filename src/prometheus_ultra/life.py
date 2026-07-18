@@ -923,6 +923,9 @@ class Omega:
 
         # 自发心跳线程 — 每60分钟自动触发 learn，CNS 链完成剩余管道
         self._heartbeat_interval = 3600  # 60分钟
+        # 源轮转: 自动学习不再只抓 web, 轮转多源让论文/代码/百科节点也能自动积累
+        self._hb_sources = ["web", "arxiv", "github", "wiki", "academic", "newsletter"]
+        self._hb_src_i = 0
         self._heartbeat_running = True
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -946,7 +949,10 @@ class Omega:
                     top = self.focus_topics.most_common(1)
                     if top:
                         hb_query = top[0][0]
-                result = self.learn(source="web", query=hb_query,
+                # 源轮转: 每轮心跳换一个源, 让论文(arxiv)/代码(github)/百科(wiki)节点自动积累
+                hb_src = self._hb_sources[self._hb_src_i % len(self._hb_sources)]
+                self._hb_src_i += 1
+                result = self.learn(source=hb_src, query=hb_query,
                                     max_results=1)
                 # 只记录成功/失败，不阻塞主循环
                 if result.get("success") or result.get("new_nodes", 0) > 0:
