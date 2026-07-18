@@ -166,7 +166,35 @@ class UltraAPIServer:
 
         @app.get("/api/v1/health")
         def health():
-            return {"status": "healthy", "service": "prometheus-ultra"}
+            # 真实健康探测 —— 不再硬编码 healthy。
+            # 旧实现恒定返回 {"status": "healthy"}, 导致 Omega 引擎未初始化或
+            # 已失效时, 看门狗(ultra_keepalive)与监控(ultra_monitor_2h)仍报绿,
+            # 真实薄弱被隐藏(监控盲区)。
+            # 设计: status 仅表达"存活"(引擎已初始化且能响应), 避免看门狗把
+            # "降级/临界"误判为"死亡"而误重启; 真实子系统健康由 engine_health
+            # 暴露(healthy/degraded/critical/empty/unknown)。
+            if self.omega is None:
+                return {
+                    "status": "unhealthy",
+                    "service": "prometheus-ultra",
+                    "engine_health": "unavailable",
+                    "detail": "Omega engine not initialized",
+                }
+            try:
+                s = self.omega.status()
+                return {
+                    "status": "healthy",
+                    "service": "prometheus-ultra",
+                    "engine_health": s.health,
+                    "detail": "engine online",
+                }
+            except Exception as e:
+                return {
+                    "status": "unhealthy",
+                    "service": "prometheus-ultra",
+                    "engine_health": "unknown",
+                    "detail": f"status probe failed: {str(e)[:160]}",
+                }
 
         @app.get("/dashboard")
         def dashboard():

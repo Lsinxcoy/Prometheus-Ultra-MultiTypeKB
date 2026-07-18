@@ -8,6 +8,8 @@ from collections import deque
 
 import pytest
 
+from fastapi.testclient import TestClient
+
 from prometheus_ultra.services.api_server import (
     UltraAPIServer,
 )
@@ -117,3 +119,66 @@ class TestEdgeCases:
             server = UltraAPIServer(host="")
         except Exception:
             pass  # Expected behavior
+
+
+# =============================================================================
+# Test Health Endpoint — 监控盲区修复回归
+# =============================================================================
+
+class _FakeHealthStatus:
+    """最小替身: 仅暴露 health 字段(路由实现只用 s.health)。"""
+    def __init__(self, health: str):
+        self.health = health
+
+
+class _FakeOmega:
+    """可控替身 Omega: 模拟不同引擎健康态, 或探测时抛异常。"""
+    def __init__(self, health: str = "healthy", exc: Exception | None = None):
+        self._health = health
+        self._exc = exc
+
+    def status(self):
+        if self._exc is not None:
+            raise self._exc
+        return _FakeHealthStatus(self._health)
+
+
+class TestHealthEndpointRealSignal:
+    """GET /api/v1/health 必须暴露真实引擎健康, 而非硬编码 healthy。"""
+
+    def test_healthy_engine_reports_real_health(self):
+        srv = UltraAPIServer()
+        srv.omega = _FakeOmega(health="healthy")
+        body = TestClient(srv.app).get("/api/v1/health").json()
+        assert body["status"] == "healthy"        # 存活契约保留
+        assert body["engine_health"] == "healthy"  # 真实信号可见
+
+    def test_degraded_engine_no_longer_masked_as_healthy(self):
+        # 核心回归: 真实薄弱(degraded)不得被端点掩盖为 healthy
+        srv = UltraAPIServer()
+        srv.omega = _FakeOmega(health="degraded")
+        body = TestClient(srv.app).get("/api/v1/health").json()
+        assert body["status"] == "healthy"         # liveness 仍成立
+        assert body["engine_health"] == "degraded"  # 真实降级态暴露
+
+    def test_critical_engine_exposed(self):
+        srv = UltraAPIServer()
+        srv.omega = _FakeOmega(health="critical")
+        body = TestClient(srv.app).get("/api/v1/health").json()
+        assert body["engine_health"] == "critical"
+
+    def test_missing_omega_reports_unhealthy(self):
+        # 引擎未初始化 = 真实死亡, 看门狗应据此重启
+        srv = UltraAPIServer()
+        srv.omega = None
+        body = TestClient(srv.app).get("/api/v1/health").json()
+        assert body["status"] == "unhealthy"
+        assert body["engine_health"] == "unavailable"
+
+    def test_status_probe_failure_reports_unhealthy(self):
+        srv = UltraAPIServer()
+        srv.omega = _FakeOmega(exc=RuntimeError("engine dead"))
+        body = TestClient(srv.app).get("/api/v1/health").json()
+        assert body["status"] == "unhealthy"
+        assert body["engine_health"] == "unknown"
+        assert "status probe failed" in body["detail"]
