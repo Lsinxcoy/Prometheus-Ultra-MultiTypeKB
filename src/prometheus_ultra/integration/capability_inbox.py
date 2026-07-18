@@ -98,12 +98,22 @@ class CapabilityInbox:
             return CapabilityReceipt(name=name, accepted=False, applied=False, note=str(e))
 
     def pending(self) -> list[dict]:
-        """返回 inbox 中尚未应用的机制(宿主轮询用)."""
+        """返回 inbox 中尚未应用的机制(宿主轮询用).
+
+        注意: _read_entries 已对单条损坏行显式告警(cycle3), 但本聚合入口仍需对
+        '整文件不可读'(权限/锁/磁盘IO/未知异常) 显式暴露 —— 否则 except 会静默返回 [],
+        宿主误判'全部已应用'而停止应用, 机制永远不落地(能力漂移)且无任何错误信号.
+        """
         try:
             entries = self._read_entries()
             applied = set(self._applied.keys())
             return [e for e in entries if e.get("name") not in applied]
-        except Exception:
+        except Exception as e:
+            # 不静默吞: inbox 读不出 ≠ inbox 空. 告警让运维/监控看到'读失败',
+            # 避免宿主把'读不了'当成'都应用完了'. 仍安全返回 [] 不崩宿主轮询.
+            logger.warning(
+                "CapabilityInbox: pending() 读取 inbox 失败(误报为空=全部已应用风险): %s", e
+            )
             return []
 
     # --- 内部 ---
