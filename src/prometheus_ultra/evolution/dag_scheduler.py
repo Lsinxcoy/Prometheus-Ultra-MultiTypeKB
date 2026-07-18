@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 import json
 import math
+import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -598,8 +599,15 @@ class DAGScheduler:
                 "metadata": task.metadata,
             }
 
-        with open(path, "w", encoding="utf-8") as f:
+        # 原子写: 先写临时文件再 os.replace, 避免进程在写 checkpoint 中途崩溃
+        # (断电/异常) 时留下半截 JSON, 导致下次 load_checkpoint 解析失败、
+        # 整个断点续跑(崩溃恢复)失效。replace 是原子的, 旧 checkpoint 始终完整。
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(checkpoint, f, ensure_ascii=False, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
         return checkpoint
 
@@ -612,24 +620,46 @@ class DAGScheduler:
         Returns:
             恢复的任务数
         """
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            # 文件级损坏(磁盘比特翻转/被截断): 抛出清晰错误而非裸 JSONDecodeError,
+            # 便于上层定位 checkpoint 文件而非静默吞掉。
+            raise ValueError(f"checkpoint 文件 '{path}' 损坏或不可读: {e}") from e
 
         self._max_concurrent = data.get("max_concurrent", self._max_concurrent)
         self._auto_parallelism = data.get("auto_parallelism", self._auto_parallelism)
         self._execution_log = data.get("execution_log", [])
 
+        valid_statuses = set(TaskStatus.__members__)
         restored = 0
+        skipped = 0
         for tid, tdata in data.get("tasks", {}).items():
+            # 逐任务容错: 单条任务记录损坏(未知状态/缺字段)不得中止整个断点续跑。
+            # 此前 TaskStatus[tdata["status"]] 遇非法值直接抛 KeyError,
+            # 导致全部进度丢失; 现降级为 PENDING(恢复后会被重试)并告警。
+            if not isinstance(tdata, dict) or "id" not in tdata or "name" not in tdata:
+                logger.warning("load_checkpoint: 跳过损坏的任务记录 %r", tid)
+                skipped += 1
+                continue
+            raw_status = tdata.get("status")
+            if raw_status not in valid_statuses:
+                logger.warning(
+                    "load_checkpoint: 任务 %r 状态 %r 非法, 降级为 PENDING", tid, raw_status
+                )
+                status = TaskStatus.PENDING
+            else:
+                status = TaskStatus[raw_status]
             task = DAGTask(
                 id=tdata["id"],
                 name=tdata["name"],
-                status=TaskStatus[tdata["status"]],
-                result=tdata["result"],
-                error=tdata["error"],
-                dependencies=set(tdata["dependencies"]),
-                dependents=set(tdata["dependents"]),
-                priority=tdata["priority"],
+                status=status,
+                result=tdata.get("result"),
+                error=tdata.get("error"),
+                dependencies=set(tdata.get("dependencies", [])),
+                dependents=set(tdata.get("dependents", [])),
+                priority=tdata.get("priority", 0),
                 dynamic_priority=tdata.get("dynamic_priority", 0.0),
                 start_time=tdata.get("start_time"),
                 end_time=tdata.get("end_time"),
@@ -640,6 +670,8 @@ class DAGScheduler:
             self._tasks[tid] = task
             restored += 1
 
+        if skipped:
+            logger.warning("load_checkpoint: 恢复 %d 条, 跳过 %d 条损坏记录", restored, skipped)
         return restored
 
     def reset_failed_tasks(self) -> int:

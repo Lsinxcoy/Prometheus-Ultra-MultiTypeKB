@@ -149,3 +149,99 @@ def test_diminishing_returns_no_args_callable_like_life():
     for v in [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]:
         ig.record_gain("reflect", v)
     assert ig.diminishing_returns() is False
+
+
+# ===== cycle5: DAGScheduler.checkpoint 持久化断点容错修复 =====
+# 根因: save_checkpoint 非原子写(中途崩溃留半截JSON); load_checkpoint 对
+# checkpoint 数据无条件信任 —— TaskStatus[tdata["status"]] 遇非法状态直接抛
+# KeyError, json.load 遇损坏文件抛 JSONDecodeError, 二者均无兜底, 导致整个
+# 断点续跑(崩溃恢复)在恰好需要它的崩溃场景下失效并丢失全部进度。
+from prometheus_ultra.evolution.dag_scheduler import DAGScheduler, TaskStatus
+
+
+def test_save_checkpoint_atomic_no_temp_leftover(tmp_path):
+    """save_checkpoint 原子写: 目标存在且.rsplit无残留 .tmp(中途崩溃不致损坏)。"""
+    sch = DAGScheduler()
+    sch.add_task("a")
+    sch.add_task("b", dependencies=["a"])
+    p = str(tmp_path / "ckpt.json")
+    sch.save_checkpoint(p)
+    assert os.path.exists(p)
+    assert not os.path.exists(p + ".tmp"), "原子写应已 rename, 不应残留 .tmp 临时文件"
+
+
+def test_load_checkpoint_roundtrip_preserves_state(tmp_path):
+    """save->load 往返: 任务数/依赖/并发度完整保留(修复不破坏正常路径)。"""
+    sch = DAGScheduler(max_concurrent=3)
+    sch.add_task("a")
+    sch.add_task("b", dependencies=["a"])
+    p = str(tmp_path / "ckpt.json")
+    sch.save_checkpoint(p)
+
+    sch2 = DAGScheduler()
+    n = sch2.load_checkpoint(p)
+    assert n == 2
+    assert sch2._max_concurrent == 3
+    assert "b" in sch2._tasks
+    assert sch2._tasks["b"].dependencies == {"a"}
+
+
+def test_load_checkpoint_resilient_to_unknown_status(tmp_path):
+    """断点续跑: 单任务状态非法时不抛 KeyError 中止全部, 降级 PENDING 继续。"""
+    sch = DAGScheduler()
+    sch.add_task("a")
+    sch.add_task("b", dependencies=["a"])
+    p = str(tmp_path / "ckpt.json")
+    sch.save_checkpoint(p)
+
+    # 篡改 checkpoint: 把任务 a 的状态改成非法枚举名
+    import json
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    tids = list(data["tasks"].keys())
+    data["tasks"][tids[0]]["status"] = "NOT_A_REAL_STATUS"
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    # 修复前此处直接 KeyError -> 整个续跑失败; 修复后返回恢复数且坏任务降级
+    restored = sch.load_checkpoint(p)
+    assert restored == 2
+    assert sch._tasks[tids[0]].status == TaskStatus.PENDING
+
+
+def test_load_checkpoint_skips_malformed_record(tmp_path, caplog):
+    """断点续跑: 单条损坏(非 dict / 缺字段)任务记录被跳过并告警, 其余正常恢复。"""
+    import json
+    import logging
+
+    sch = DAGScheduler()
+    sch.add_task("a")
+    sch.add_task("b", dependencies=["a"])
+    p = str(tmp_path / "ckpt.json")
+    sch.save_checkpoint(p)
+
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["tasks"]["broken"] = "this is not a dict"  # 损坏记录
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    caplog.set_level(logging.WARNING,
+                     logger="prometheus_ultra.evolution.dag_scheduler")
+    restored = sch.load_checkpoint(p)
+    assert restored == 2                      # 仅合法两条恢复
+    assert "broken" not in sch._tasks         # 损坏记录被跳过
+    assert any("跳过损坏的任务记录" in r.message for r in caplog.records), \
+        "损坏任务记录应触发告警, 但无日志"
+
+
+def test_load_checkpoint_corrupt_file_raises_clear_error(tmp_path):
+    """断点续跑: 文件级损坏(截断 JSON)抛出清晰 ValueError(非静默裸异常)。"""
+    import pytest
+
+    sch = DAGScheduler()
+    p = str(tmp_path / "ckpt.json")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write('{ "version": 1, "tasks": { "a": ')  # 截断的 JSON
+    with pytest.raises(ValueError):
+        sch.load_checkpoint(p)
