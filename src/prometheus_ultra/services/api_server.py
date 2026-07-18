@@ -834,6 +834,36 @@ class UltraAPIServer:
                         "seconds_to_full": due.get("seconds_to_full", 0),
                         "seconds_to_incremental": due.get("seconds_to_incremental", 0),
                     }
+                    # ── 事件总线健康 (调用错误 + 孤岛模块检测) ──
+                    try:
+                        bus = getattr(o, "event_bus", None)
+                        if bus is not None and hasattr(bus, "get_stats"):
+                            bs = bus.get_stats()
+                            # 孤岛 topic: 发布过(published_topics) 但无订阅者(_subscribers 无/空)
+                            island_topics = []
+                            try:
+                                pub_topics = getattr(bus, "_published_topics", set()) or set()
+                                subs = getattr(bus, "_subscribers", {}) or {}
+                                for topic in pub_topics:
+                                    if topic == "#":
+                                        continue
+                                    if not subs.get(topic):
+                                        island_topics.append(topic)
+                            except Exception:
+                                pass
+                            summary["event_bus"] = {
+                                "published": bs.get("published", 0),
+                                "delivered": bs.get("delivered", 0),
+                                "failed": bs.get("failed", 0),
+                                "dead_letters": bs.get("dead_letters", 0),
+                                "topics": bs.get("topics", 0),
+                                "island_topics": island_topics,  # 无订阅者的事件类型 = 孤岛模块
+                                "recent_dead": [
+                                    d.get("event", {}).get("type", "?") for d in (bs.get("_dead_letters", []) if isinstance(bs.get("_dead_letters"), list) else [])[:5]
+                                ],
+                            }
+                    except Exception:
+                        summary["event_bus"] = {}
                     # ── 学习到的论文 (从 store PAPER 节点动态聚合, 反映真实 arxiv 学习) ──
                     try:
                         from prometheus_ultra.foundation.store import NodeType

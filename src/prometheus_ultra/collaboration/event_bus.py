@@ -52,6 +52,7 @@ class CIPEventBus:
         self._subscribers: dict[str, list[dict]] = defaultdict(list)
         self._history: list[dict] = []
         self._dead_letters: list[dict] = []
+        self._published_topics: set[str] = set()  # 孤岛检测: 发布过但无订阅者的 topic
         self._stats = {"published": 0, "delivered": 0, "failed": 0}
     
     def subscribe(self, topic: str, handler: callable,
@@ -142,6 +143,7 @@ class CIPEventBus:
         }
         
         self._stats["published"] += 1
+        self._published_topics.add(topic)  # 记录所有发布过的 topic (孤岛检测用)
         
         # 查找匹配订阅者
         subscribers = self._subscribers.get(topic, [])

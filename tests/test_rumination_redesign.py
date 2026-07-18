@@ -96,6 +96,10 @@ def test_rumination_schedule_logic():
     print("\n=== Test 4: 反刍调度逻辑 ===")
     o = Omega()
     eng = o.rumination_engine
+    # 隔离持久化状态: 测试假设 fresh 启动, 清掉可能残留的 rumination_state.json
+    eng.last_full_rumination = 0.0
+    eng.last_incremental_rumination = 0.0
+    eng.history = []
 
     # 刚初始化，incremental 应 due（last_incremental=0）
     due = eng.next_rumination_due()

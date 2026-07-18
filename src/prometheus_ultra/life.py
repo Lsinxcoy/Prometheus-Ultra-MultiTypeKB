@@ -4447,6 +4447,27 @@ class Omega:
             snap["consumed"] += c6
             snap["by_carrier"]["harness_x"] = {"total": len(prims), "consumed": c6}
 
+            # 孤岛机制检测: 注册/定义但从未被消费的载体项 (沉默机制)
+            # 这些是"看似存在、实则从不触发"的虚假繁荣来源
+            silent = []
+            for name, m in mechs.items():
+                if isinstance(m, dict) and m.get("consumed_at") is None and not m.get("emit_accepted"):
+                    silent.append(f"registry:{name}")
+            for name, s in skills.items():
+                if isinstance(s, dict) and s.get("consumed_at") is None:
+                    silent.append(f"skill:{name}")
+            for name, g in genes.items():
+                if isinstance(g, dict) and g.get("consumed_at") is None:
+                    silent.append(f"gene:{name}")
+            for i, (name, v) in enumerate(trig.items()):
+                if not v or v <= 0:
+                    silent.append(f"instinct:{name}")
+            for name, p in prims.items():
+                if hasattr(p, "last_used") and getattr(p, "last_used", 0) <= 0:
+                    silent.append(f"harness:{name}")
+            snap["silent_mechanisms"] = silent
+            snap["silent_count"] = len(silent)
+
             snap["rate"] = round(snap["consumed"] / max(1, snap["total"]), 4)
             return snap
         except Exception as e:
