@@ -19,6 +19,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# fitness 趋势窗口上限: 仅保留最近 N 条记录, 防止长时运行实例(如 9200)内存无界增长,
+# 同时保证降级/恢复判定只基于近期真实信号, 不被远古数据污染。
+MAX_FITNESS_HISTORY = 200
+
 
 class AutonomicRegulator:
     """Omega 自主神经系统——管道间自进化反馈核。
@@ -109,6 +113,8 @@ class AutonomicRegulator:
             routed = d.get("routed_nodes", 0) or 0
             if promoted > 0 or routed > 0:
                 self._fitness_log.append((max(0.1, 0.5 + 0.01 * promoted), time.time(), "rumination"))
+                if len(self._fitness_log) > MAX_FITNESS_HISTORY:
+                    self._fitness_log = self._fitness_log[-MAX_FITNESS_HISTORY:]
         except Exception as e:
             logger.warning("AutonomicRegulator._on_rumination: %s", e)
 
@@ -119,6 +125,8 @@ class AutonomicRegulator:
             accepted = d.get("accepted", False)
             fit = 0.5 + (0.05 if accepted else -0.05)
             self._fitness_log.append((max(0.05, fit), time.time(), "capability"))
+            if len(self._fitness_log) > MAX_FITNESS_HISTORY:
+                self._fitness_log = self._fitness_log[-MAX_FITNESS_HISTORY:]
         except Exception as e:
             logger.warning("AutonomicRegulator._on_capability: %s", e)
 
@@ -132,6 +140,8 @@ class AutonomicRegulator:
             strategy = data.get("strategy", "default")
 
             self._fitness_log.append((after, time.time(), "evolve"))
+            if len(self._fitness_log) > MAX_FITNESS_HISTORY:
+                self._fitness_log = self._fitness_log[-MAX_FITNESS_HISTORY:]
             self._strategy_results[strategy].append(delta)
 
             # 1. 用真实差值更新 UCB1 奖励（不再用假的正数奖励）
@@ -161,9 +171,11 @@ class AutonomicRegulator:
                 pass
 
             # 2. 连续 fitness 下降 → 触发降级
-            recent = [f for f, _, _ in self._fitness_log[-5:]]
-            if len(recent) >= 3 and all(recent[i] < recent[i-1] for i in range(1, len(recent))):
-                self._trigger_downgrade(f"fitness_decline: {recent}")
+            # 仅基于 evolve 真实 fitness (type=="evolve"), 排除 capability/rumination 合成值噪声:
+            # 否则外部机制被接受(0.55)/反刍产出会伪造"连续下降", 误触降级 + 熔断 + 外部进化(隐藏真实薄弱)。
+            evolve_recent = [v for (v, _, t) in self._fitness_log if t == "evolve"][-5:]
+            if len(evolve_recent) >= 3 and all(evolve_recent[i] < evolve_recent[i-1] for i in range(1, len(evolve_recent))):
+                self._trigger_downgrade(f"fitness_decline: {evolve_recent}")
                 # ===== P0b 熔断门: 连续下降时回滚最近激活的机制(解 B3 僵尸机制无监管) =====
                 # 坏机制激活后若拖垮 fitness, 自动 deactivate (而非永久驻留 _enabled)
                 self._circuit_break_active_mechanisms()
@@ -230,12 +242,13 @@ class AutonomicRegulator:
     def _on_maintain(self, event: dict) -> None:
         """maintain 完成后——检查恢复状态。"""
         try:
-            recent = [f for f, _, _ in self._fitness_log[-3:]]
-            if len(recent) >= 2 and recent[-1] > recent[0]:
+            # 仅基于 evolve 真实 fitness 判断恢复, 排除 capability/rumination 合成值噪声
+            evolve_recent = [v for (v, _, t) in self._fitness_log if t == "evolve"][-3:]
+            if len(evolve_recent) >= 2 and evolve_recent[-1] > evolve_recent[0]:
                 # fitness 在上升 → 系统恢复中
                 self._omega.event_bus.publish({
                     "type": "system_recovered",
-                    "fitness": recent[-1],
+                    "fitness": evolve_recent[-1],
                 })
         except Exception as e:
             logger.warning("AutonomicRegulator._on_maintain: %s", e)
