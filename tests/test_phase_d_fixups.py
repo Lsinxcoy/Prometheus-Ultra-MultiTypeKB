@@ -19,8 +19,6 @@ def test_silent_classification_orphan_and_dormant():
 
 def test_fts_special_chars_no_fallback():
     """FTS 查询含特殊字符(= , .) 应被转义, 不触发 fallback (或至少尝试 phrase)."""
-    import sqlite3, tempfile, os
-    from prometheus_ultra.foundation.store import Store
     # 轻量: 直接验证转义逻辑 (不建全库)
     q = "a=b,c.d"
     special = set('*():"^.+-/')
