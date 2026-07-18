@@ -97,17 +97,15 @@ class FiveGates:
         return CascadeResult(passed=all_passed, gates_checked=len(checks), details=checks)
 
     def _get_dynamic_threshold(self, name: str, default: float) -> float:
-        if not self._adaptive:
-            return default
-
-        if name == "min_utility" and len(self._utility_history) >= 10:
-            avg_util = sum(self._utility_history[-10:]) / 10
-            return max(0.05, min(0.5, avg_util * 0.3))
-
-        if name == "max_surprise" and len(self._surprise_history) >= 10:
-            avg_surp = sum(self._surprise_history[-10:]) / 10
-            return max(0.5, min(1.5, avg_surp * 1.5))
-
+        # The effective threshold is `default`. In adaptive mode this carries
+        # the value maintained by _adapt_thresholds() — which raises/lowers
+        # self._current_min_utility from the recent pass-rate (contract:
+        # pass_rate>0.9 -> raise, pass_rate<0.3 -> lower). A previous
+        # history-mean branch (avg*0.3 / avg*1.5) shadowed that adaptation:
+        # once the utility/surprise history reached 10 samples it overrode the
+        # adapted value, so _adapt_thresholds() became a dead no-op after warm-up
+        # and the gate never tightened/loosened as documented. We now always
+        # consult the adapted threshold.
         return default
 
     def _adapt_thresholds(self):
