@@ -834,6 +834,18 @@ class UltraAPIServer:
                         "seconds_to_full": due.get("seconds_to_full", 0),
                         "seconds_to_incremental": due.get("seconds_to_incremental", 0),
                     }
+                    # ── 学习到的论文 (从 store PAPER 节点动态聚合, 反映真实 arxiv 学习) ──
+                    try:
+                        from prometheus_ultra.foundation.store import NodeType
+                        paper_nodes = o.store.get_nodes_by_type(NodeType.PAPER, limit=20) if o.store else []
+                        learned_papers = [{
+                            "title": (n.content or "")[:80],
+                            "utility": round(getattr(n, "utility", 0.0), 3),
+                            "url": getattr(n, "url", "") or "",
+                        } for n in paper_nodes]
+                        summary["learned_papers"] = learned_papers
+                    except Exception:
+                        summary["learned_papers"] = []
                 except Exception:
                     summary["rumination"] = {}
 

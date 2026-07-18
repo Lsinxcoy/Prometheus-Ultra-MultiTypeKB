@@ -62,6 +62,7 @@ class KnowledgeRuminationEngine:
         high_access_threshold: int = 5,
         full_interval_seconds: float = 21600.0,   # 默认 6h 全量
         incremental_interval_seconds: float = 1800.0,  # 默认 30min 增量
+        state_path: str | None = None,  # 调度状态持久化路径(跨重启保留反刍周期)
     ):
         self.omega = omega
         self.store = getattr(omega, "store", None)
@@ -77,10 +78,13 @@ class KnowledgeRuminationEngine:
         self.full_interval_seconds = full_interval_seconds
         self.incremental_interval_seconds = incremental_interval_seconds
 
-        # 调度状态
+        # 调度状态 — 默认内存态, 若 state_path 给定则加载持久化值
+        self.state_path = state_path
         self.last_full_rumination: float = 0.0
         self.last_incremental_rumination: float = 0.0
-        self.history: list[RuminationResult] = []
+        self.history: list = []
+        if state_path:
+            self._load()
 
     # ------------------------------------------------------------------
     # 依赖同步：修正初始化顺序 bug
@@ -141,6 +145,9 @@ class KnowledgeRuminationEngine:
         self.history.append(result)
         if len(self.history) > 10:
             self.history = self.history[-10:]
+
+        # 持久化调度状态(跨重启保留反刍周期, 避免 cron 高频重启清零导致永远不触发)
+        self._persist()
 
         logger.info("[Rumination:%s] 完成 relearned=%d mappings=%d skills=%d",
                     mode, result.relearned, result.mappings_applied, result.skills_promoted)
@@ -425,6 +432,48 @@ class KnowledgeRuminationEngine:
                         pass
         except Exception as e:
             logger.debug("[Rumination] 模式晋升失败: %s", e)
+
+    # ------------------------------------------------------------------
+    # 调度状态持久化 (跨重启保留反刍周期)
+    # ------------------------------------------------------------------
+    def _persist(self) -> None:
+        """原子写调度状态到 state_path (JSON). 失败静默(不阻塞反刍)."""
+        state_path = getattr(self, "state_path", None)
+        if not state_path:
+            return
+        try:
+            import os, json
+            os.makedirs(os.path.dirname(state_path) or ".", exist_ok=True)
+            tmp = state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({
+                    "last_full_rumination": getattr(self, "last_full_rumination", 0.0),
+                    "last_incremental_rumination": getattr(self, "last_incremental_rumination", 0.0),
+                    "history_len": len(getattr(self, "history", []) or []),
+                    "updated_at": time.time(),
+                }, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, state_path)
+        except Exception as e:
+            logger.debug("[Rumination] persist failed: %s", e)
+
+    def _load(self) -> None:
+        """从 state_path 加载调度状态. 损坏/缺失则保持默认(0.0)."""
+        import json
+        state_path = getattr(self, "state_path", None)
+        if not state_path:
+            return
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            self.last_full_rumination = float(d.get("last_full_rumination", 0.0) or 0.0)
+            self.last_incremental_rumination = float(d.get("last_incremental_rumination", 0.0) or 0.0)
+            self.history = [None] * int(d.get("history_len", 0) or 0)
+            logger.info("[Rumination] loaded state: full=%s inc=%s",
+                        self.last_full_rumination, self.last_incremental_rumination)
+        except FileNotFoundError:
+            pass  # 首次运行, 保持默认
+        except Exception as e:
+            logger.debug("[Rumination] load failed (using defaults): %s", e)
 
     # ------------------------------------------------------------------
     # 状态查询

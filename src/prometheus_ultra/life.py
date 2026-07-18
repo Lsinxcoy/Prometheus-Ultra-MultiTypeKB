@@ -452,7 +452,11 @@ class Omega:
         self.semantic_learner = SemanticLearner()
 
         # ===== 学习管道反刍环节 (温故知新) =====
-        self.rumination_engine = KnowledgeRuminationEngine(omega=self)
+        # state_path 持久化调度状态, 避免 cron 高频重启清零导致反刍永远不触发
+        self.rumination_engine = KnowledgeRuminationEngine(
+            omega=self,
+            state_path=os.path.join("archive", "rumination_state.json"),
+        )
 
         # ===== OpenOPC机制借鉴 =====
         self.attribution_scoring = AttributionEvolutionScoring()
