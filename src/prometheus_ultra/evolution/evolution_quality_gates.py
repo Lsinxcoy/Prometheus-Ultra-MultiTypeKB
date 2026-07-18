@@ -179,7 +179,10 @@ class EvolutionQualityGates:
         
         mutation_rate = result.get("mutation_rate", 0.1)
         if isinstance(mutation_rate, (int, float)):
-            check.score = 1.0 - abs(mutation_rate - 0.1)  # 理想值0.1
+            # 可靠性评分必须落在 [0,1] 质量分区间 (与 functional/performance/diversity 门一致);
+            # 当 mutation_rate 偏离 0.1 过大(如 >1.1 或 < -0.9, 来自未校验的 evolution result)
+            # 原式 1.0 - abs(...) 会产出负数, 污染 QualityReport.avg_score 与 get_stats() 聚合。
+            check.score = min(1.0, max(0.0, 1.0 - abs(mutation_rate - 0.1)))  # 理想值0.1, 限定[0,1]
             if mutation_rate > self.max_mutation_rate:
                 check.result = GateResult.WARN
                 check.message = f"变异率过高: {mutation_rate:.3f}"

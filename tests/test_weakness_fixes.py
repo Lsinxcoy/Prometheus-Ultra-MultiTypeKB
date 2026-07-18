@@ -245,3 +245,59 @@ def test_load_checkpoint_corrupt_file_raises_clear_error(tmp_path):
         f.write('{ "version": 1, "tasks": { "a": ')  # 截断的 JSON
     with pytest.raises(ValueError):
         sch.load_checkpoint(p)
+
+
+# ---- 周期9: EvolutionQualityGates._check_reliability 可靠性评分越界(负数) ----
+# 根因: evolution_quality_gates.py:182 原式 check.score = 1.0 - abs(mutation_rate - 0.1)
+# 未夹到 [0,1]; 当 mutation_rate 偏离 0.1 过大(>1.1 或 <-0.9, 来自未校验的
+# evolution result) 会产出负数, 污染 QualityReport.avg_score 与 get_stats() 聚合。
+# 其 sibling 门 (functional/performance/diversity) 全部 clamp 到 [0,1]。
+from prometheus_ultra.evolution.evolution_quality_gates import (
+    EvolutionQualityGates, GateResult,
+)
+
+
+def _reliability_check(report):
+    return next(c for c in report.checks if c.name == "reliability")
+
+
+def test_reliability_gate_score_clamped_high_mutation():
+    """mutation_rate=2.0 -> 原式 1.0-1.9=-0.9, 必须夹紧到 0.0; WARN 决策不变。"""
+    gates = EvolutionQualityGates()
+    rep = gates.check({"mutation_rate": 2.0, "best_fitness": 0.8})
+    rel = _reliability_check(rep)
+    assert 0.0 <= rel.score <= 1.0
+    assert rel.score == 0.0
+    assert rel.result == GateResult.WARN
+
+
+def test_reliability_gate_score_clamped_extreme():
+    """mutation_rate=5.0 -> 原式 -3.9, 必须夹紧到 0.0。"""
+    gates = EvolutionQualityGates()
+    rep = gates.check({"mutation_rate": 5.0})
+    assert _reliability_check(rep).score == 0.0
+
+
+def test_reliability_gate_score_clamped_negative_input():
+    """mutation_rate=-1.0 -> 原式 -0.1, 必须夹紧到 0.0。"""
+    gates = EvolutionQualityGates()
+    rep = gates.check({"mutation_rate": -1.0})
+    assert _reliability_check(rep).score == 0.0
+
+
+def test_reliability_gate_score_ideal_is_one():
+    """mutation_rate=0.1 (理想) -> 评分 1.0, 决策 PASS。"""
+    gates = EvolutionQualityGates()
+    rep = gates.check({"mutation_rate": 0.1})
+    rel = _reliability_check(rep)
+    assert rel.score == 1.0
+    assert rel.result == GateResult.PASS
+
+
+def test_quality_report_avg_score_stays_in_range_pathological():
+    """即便出现异常的 mutation_rate, 聚合 avg_score 不得越出 [0,1] / 变负。"""
+    gates = EvolutionQualityGates()
+    for mr in [0.1, 0.3, 2.0, 5.0, -1.0]:
+        gates.check({"mutation_rate": mr, "best_fitness": 0.8})
+    stats = gates.get_stats()
+    assert 0.0 <= stats["avg_score"] <= 1.0
