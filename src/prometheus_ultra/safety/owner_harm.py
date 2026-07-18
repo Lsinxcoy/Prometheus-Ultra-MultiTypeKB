@@ -54,6 +54,12 @@ class OwnerHarmTrustBoundary:
         self._boundary_violations: list[dict] = []
         self._default_owner: str = default_owner
         self._cross_boundary_threshold: int = cross_boundary_threshold
+        # violation 持久化: 跨重启不丢, 便于监控定性良性/恶性
+        import os
+        self._viol_log_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "archive", "owner_harm_violations.json")
+        self._viol_max_keep = 500
 
     # ------------------------------------------------------------------
     # Public API
@@ -130,13 +136,16 @@ class OwnerHarmTrustBoundary:
             }
 
         # -- Denied — record violation ---------------------------------------
+        import time as _time
         violation = {
+            "ts": _time.time(),
             "node_id": node_id,
             "owner": owner,
             "requester": requester,
             "reason": f"{requester} does not have trust from owner {owner}",
         }
         self._boundary_violations.append(violation)
+        self._persist_violation(violation)
         logger.warning(
             "Owner-Harm boundary violation: %s tried to access %s (owned by %s)",
             requester, node_id, owner,
@@ -163,15 +172,43 @@ class OwnerHarmTrustBoundary:
 
         Returns ``{"total_owners": int, "total_artifacts": int,
         "trust_relationships": int, "violation_count": int}``.
+        violation_count 含内存 + 持久化累计 (跨重启不丢).
         """
         unique_owners = set(self._owners.values())
         trust_relationships = sum(len(trusted) for trusted in self._trust_matrix.values())
+        # 内存 + 持久化文件累计
+        persisted = 0
+        try:
+            import os, json
+            if os.path.exists(self._viol_log_path):
+                persisted = len(json.load(open(self._viol_log_path, encoding="utf-8")))
+        except Exception:
+            persisted = 0
         return {
             "total_owners": len(unique_owners),
             "total_artifacts": len(self._owners),
             "trust_relationships": trust_relationships,
-            "violation_count": len(self._boundary_violations),
+            "violation_count": persisted,
         }
+
+    def _persist_violation(self, violation: dict) -> None:
+        """追加 violation 到 archive/owner_harm_violations.json (跨重启持久化)."""
+        try:
+            import os, json
+            os.makedirs(os.path.dirname(self._viol_log_path), exist_ok=True)
+            buf = []
+            if os.path.exists(self._viol_log_path):
+                try:
+                    buf = json.load(open(self._viol_log_path, encoding="utf-8"))
+                except Exception:
+                    buf = []
+            buf.append(violation)
+            if len(buf) > self._viol_max_keep:
+                buf = buf[-self._viol_max_keep:]
+            json.dump(buf, open(self._viol_log_path, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.debug("Owner-Harm persist violation failed: %s", e)
 
     def get_boundary_violations(self, limit: int = 10) -> list[dict]:
         """Return the most recent boundary violation attempts, up to *limit*."""

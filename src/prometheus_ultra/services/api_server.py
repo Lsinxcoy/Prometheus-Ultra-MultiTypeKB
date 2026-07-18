@@ -164,6 +164,33 @@ class UltraAPIServer:
     def _setup_routes(self):
         app = self.app
 
+        @app.get("/api/v1/owner-harm/violations")
+        def owner_harm_violations(limit: int = 20):
+            """返回最近 boundary violation (跨重启持久化). 供监控定性良性/恶性."""
+            try:
+                oh = getattr(self.omega, "owner_harm", None)
+                if oh is None:
+                    return {"violations": [], "count": 0, "source": "memory_only"}
+                recent = oh.get_boundary_violations(limit=limit)
+                # 内存最新 + 持久化文件(更全面) -> 合并去重(按 ts+node_id+requester)
+                import os, json
+                merged = list(recent)
+                try:
+                    if os.path.exists(oh._viol_log_path):
+                        buf = json.load(open(oh._viol_log_path, encoding="utf-8"))
+                        seen = {(v.get("ts"), v.get("node_id"), v.get("requester")) for v in recent}
+                        for v in buf:
+                            k = (v.get("ts"), v.get("node_id"), v.get("requester"))
+                            if k not in seen:
+                                merged.append(v)
+                                seen.add(k)
+                except Exception:
+                    pass
+                merged.sort(key=lambda v: v.get("ts", 0), reverse=True)
+                return {"violations": merged[:limit], "count": len(merged), "source": "persisted"}
+            except Exception as e:
+                return {"violations": [], "count": 0, "error": str(e)[:160]}
+
         @app.get("/api/v1/health")
         def health():
             # 真实健康探测 —— 不再硬编码 healthy。

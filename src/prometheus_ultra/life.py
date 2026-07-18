@@ -2982,7 +2982,9 @@ class Omega:
         else:
             logger.debug("learn: utility_tracker not initialized, skipping")
 
-        self.skill_registry.register(type("Skill", (), {"name": f"learn_{source}_{query}"})())
+        # 注意: 不为每次 learn 的 query 注册一次性 skill (learn_{source}_{query})
+        # 那会制造永不消费的孤儿 skill -> 监控误报触发缺失. query 的评估/路由已由
+        # curator.evaluate + skill_claw.route 处理. 通用入口 learn_{source} 仍注册(见下).
         self.curator.evaluate(type("Skill", (), {"name": f"learn_{source}_{query}", "content": query})())
         self.skill_claw.route(query)
         self.mechanism_registry.register(f"learn_{source}", {"query": query, "count": len(new_nodes)})
