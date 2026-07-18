@@ -49,8 +49,8 @@ class UtilityDecay:
         # Reference increases score
         ud.reference("k001")  # +2
 
-        # Apply daily decay
-        ud.apply_decay(days_elapsed=30)
+        # Apply daily decay (explicit 30-day window override; None = real-time)
+        ud.apply_decay(30)
 
         # Check what should be cleaned
         candidates = ud.get_deletion_candidates()
@@ -94,21 +94,36 @@ class UtilityDecay:
         self._stats["referenced"] += 1
         return True
 
-    def apply_decay(self, days_elapsed: float = 1.0):
+    def apply_decay(self, days_elapsed: float | None = None):
         """Apply time-based decay to all entries.
 
-        From MiMo: "30天未引用 → -1"
+        From MiMo: "30天未引用 → -1".
+
+        Args:
+            days_elapsed: Optional override for the elapsed-since-last-reference
+                window, in days. When ``None`` (default), decay is computed from the
+                real wall-clock time since each entry was last referenced — this is
+                the production/maintain behavior. When an explicit value is given, it
+                is used as the elapsed window instead, enabling deterministic
+                backfill after downtime, simulation, and testing. The parameter is
+                ALWAYS honored (it was previously silently ignored, so a caller
+                passing ``days_elapsed=30`` got a no-op while wall-clock time was
+                used instead).
         """
         now = time.time()
         for entry in self._entries.values():
-            days_since_ref = (now - entry.last_referenced) / 86400
+            # Honor the explicit window when provided; otherwise use real wall-clock.
+            if days_elapsed is None:
+                elapsed = (now - entry.last_referenced) / 86400.0
+            else:
+                elapsed = float(days_elapsed)
 
-            if days_since_ref >= 30 and entry.layer == "memory":
-                decay_amount = self.DECAY_PER_30_DAYS * (days_since_ref / 30)
+            if elapsed >= 30 and entry.layer == "memory":
+                decay_amount = self.DECAY_PER_30_DAYS * (elapsed / 30)
                 entry.score = max(0, entry.score - decay_amount)
                 self._stats["decayed"] += 1
 
-                if entry.score < self.DELETION_THRESHOLD and days_since_ref > self.DELETION_DAYS_UNUSED:
+                if entry.score < self.DELETION_THRESHOLD and elapsed > self.DELETION_DAYS_UNUSED:
                     entry.is_candidate_for_deletion = True
 
     def get_deletion_candidates(self) -> list[UtilityEntry]:

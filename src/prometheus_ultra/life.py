@@ -3853,7 +3853,7 @@ class Omega:
         self.hands.execute({"action": "maintain"})
 
         # MiMo: Utility Decay — apply decay rules
-        self.utility_decay.apply_decay(days_elapsed=1)
+        self.utility_decay.apply_decay()  # real-time decay; explicit days_elapsed overrides window
         self.utility_tracker.apply_decay()
 
         # ===== P1-3: 保护高 recall 命中节点不被遗忘 =====
