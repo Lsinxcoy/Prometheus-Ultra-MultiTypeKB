@@ -83,6 +83,12 @@ SOURCE_CONFIG = {
 
 _TIMEOUT = 15  # seconds
 
+# Bound the in-memory scan history so the shared singleton
+# (self.knowledge_scanner, read cross-thread by the API dashboard via
+# get_stats()/probe_sources()) cannot grow without limit on a long-running
+# instance. Cumulative counters (_total_results/_source_stats) are NOT capped.
+MAX_SCAN_HISTORY = 1000
+
 
 def _http_get(url: str, headers: dict | None = None) -> str | None:
     """Fetch URL with timeout and error handling."""
@@ -154,6 +160,9 @@ class KnowledgeScanner:
             "source": source.value, "query": query,
             "results": len(results), "timestamp": time.time(),
         })
+        # Trim history to a bounded window (keep most-recent) — see MAX_SCAN_HISTORY.
+        if len(self._scans) > MAX_SCAN_HISTORY:
+            self._scans = self._scans[-MAX_SCAN_HISTORY:]
         self._total_results += len(results)
         self._source_stats[source.value] = self._source_stats.get(source.value, 0) + len(results)
 
