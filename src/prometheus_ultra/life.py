@@ -4449,30 +4449,97 @@ class Omega:
 
             # 孤岛机制检测: 注册/定义但从未被消费的载体项 (沉默机制)
             # 这些是"看似存在、实则从不触发"的虚假繁荣来源
+            # 根因分类: 测试残留 / 触发路径缺失(真bug) / 合理休眠
             silent = []
+            silent_by_category = {"test_residue": [], "trigger_missing": [], "dormant_ok": []}
+            def _classify_silent(label, name):
+                silent.append(f"{label}:{name}")
+                low = name.lower()
+                if "test" in low or "tmp" in low or low.endswith("_p") or low.startswith("p_") or low.startswith("c1_") or low.startswith("c2_"):
+                    silent_by_category["test_residue"].append(f"{label}:{name}")
+                elif label in ("registry", "skill", "gene") and not any(k in low for k in ("explore", "pending", "speculative", "candidate")):
+                    # 非探索性/非待定机制却从未消费 = 触发路径可能缺失(真bug线索)
+                    silent_by_category["trigger_missing"].append(f"{label}:{name}")
+                else:
+                    silent_by_category["dormant_ok"].append(f"{label}:{name}")
             for name, m in mechs.items():
                 if isinstance(m, dict) and m.get("consumed_at") is None and not m.get("emit_accepted"):
-                    silent.append(f"registry:{name}")
+                    _classify_silent("registry", name)
             for name, s in skills.items():
                 if isinstance(s, dict) and s.get("consumed_at") is None:
-                    silent.append(f"skill:{name}")
+                    _classify_silent("skill", name)
             for name, g in genes.items():
                 if isinstance(g, dict) and g.get("consumed_at") is None:
-                    silent.append(f"gene:{name}")
+                    _classify_silent("gene", name)
             for i, (name, v) in enumerate(trig.items()):
                 if not v or v <= 0:
-                    silent.append(f"instinct:{name}")
+                    _classify_silent("instinct", name)
             for name, p in prims.items():
                 if hasattr(p, "last_used") and getattr(p, "last_used", 0) <= 0:
-                    silent.append(f"harness:{name}")
+                    _classify_silent("harness", name)
             snap["silent_mechanisms"] = silent
             snap["silent_count"] = len(silent)
+            snap["silent_by_category"] = silent_by_category
 
             snap["rate"] = round(snap["consumed"] / max(1, snap["total"]), 4)
             return snap
         except Exception as e:
             logger.debug("get_mechanism_consumption failed: %s", e)
             return {"total": 0, "consumed": 0, "rate": 0.0, "by_carrier": {}}
+
+    def get_pipeline_health(self) -> dict:
+        """Tier 1/3 聚合: 过程层健康(熔断/评估失败/安全边界/FTS降级/LLM-dark/A2A).
+
+        这些信号原本只在日志里, 监控看不见 -> 长期带病运行无人知.
+        返回分级所需的原始计数, 由监控脚本判定严重度.
+        """
+        try:
+            health = {
+                "llm_mode": "unknown",
+                "llm_available": False,
+                "fuse_invalid": 0,          # 信号融合层 invalid 触发次数
+                "passk_failed": 0,         # 进化评估器连续失败数
+                "owner_harm_violations": 0, # 安全本能边界突破计数
+                "fts_fallback": 0,         # 全文检索降级次数
+                "a2a_failed": 0,           # 分布式协作委派失败
+                "openalex_429": 0,         # 学术源限流
+            }
+            # LLM bridge 模式 (LLM-dark 单列)
+            llm = getattr(self, "llm", None)
+            if llm is not None:
+                health["llm_mode"] = getattr(llm, "_mode", getattr(llm, "mode", "unknown"))
+                health["llm_available"] = bool(getattr(llm, "available", False))
+            # 信号融合层熔断计数 (cerebral_cortex 在熔断时累加 _health_counters)
+            hc = getattr(self, "_health_counters", None) or {}
+            health["fuse_invalid"] = hc.get("fuse_invalid", 0)
+            # PassK 评估失败计数 (从 _history 统计 passed=False)
+            pk = getattr(self, "pass_k", None)
+            if pk is not None:
+                hist = getattr(pk, "_history", []) or []
+                try:
+                    health["passk_failed"] = sum(1 for h in hist if getattr(h, "passed", True) is False)
+                except Exception:
+                    health["passk_failed"] = 0
+            # owner_harm 边界突破
+            oh = getattr(self, "owner_harm", None)
+            if oh is not None and hasattr(oh, "get_owners_stats"):
+                try:
+                    st = oh.get_owners_stats()
+                    health["owner_harm_violations"] = st.get("violation_count", 0) or st.get("violations", 0) or 0
+                except Exception:
+                    pass
+            # store FTS fallback 计数
+            st_store = getattr(self, "store", None)
+            if st_store is not None:
+                health["fts_fallback"] = getattr(st_store, "_fts_fallback_count", 0) or 0
+            # A2A 委派失败
+            a2a = getattr(self, "a2a", None)
+            if a2a is not None:
+                health["a2a_failed"] = getattr(a2a, "_fail_count", 0) or getattr(a2a, "fail_count", 0) or 0
+            return health
+        except Exception as e:
+            logger.debug("get_pipeline_health failed: %s", e)
+            return {"llm_mode": "unknown", "llm_available": False}
 
     def _compute_fitness(self):
         """Compute system fitness based on multiple quality dimensions."""

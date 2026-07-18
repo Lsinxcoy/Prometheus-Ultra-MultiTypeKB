@@ -879,6 +879,23 @@ class UltraAPIServer:
                 except Exception:
                     summary["rumination"] = {}
 
+                # ── 孤岛机制根因分类 (Tier 1: 把噪音变可行动清单) ──
+                try:
+                    cons = o.get_mechanism_consumption()
+                    summary["mechanism_categories"] = {
+                        "silent_by_category": cons.get("silent_by_category", {}),
+                        "silent_count": cons.get("silent_count", 0),
+                        "rate": cons.get("rate", 0.0),
+                    }
+                except Exception:
+                    summary["mechanism_categories"] = {}
+
+                # ── 过程层健康 (Tier 1 LLM-dark + Tier 3 资源/信号) ──
+                try:
+                    summary["pipeline_health"] = o.get_pipeline_health()
+                except Exception:
+                    summary["pipeline_health"] = {}
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:

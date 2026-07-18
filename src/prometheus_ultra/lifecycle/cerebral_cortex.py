@@ -350,6 +350,15 @@ class CerebralCortex:
             })
             logger.info("CerebralCortex: fuse engaged for '%s' (%d/%d invalid)",
                         trigger_type, invalid_count, len(recent))
+            # 监控计数: 熔断触发次数 (供 get_pipeline_health 读取)
+            try:
+                hc = getattr(self._omega, "_health_counters", None)
+                if hc is None:
+                    self._omega._health_counters = {}
+                    hc = self._omega._health_counters
+                hc["fuse_invalid"] = hc.get("fuse_invalid", 0) + 1
+            except Exception:
+                pass
 
     def _adapt_threshold_if_needed(self, trigger_type: str) -> None:
         """基于历史 outcome 计算建议阈值（不直接写 CNS，由 SFL 统一写入）。"""

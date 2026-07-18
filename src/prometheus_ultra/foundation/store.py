@@ -306,6 +306,7 @@ class MinervaStore:
         self._lock = threading.RLock()
         self._tokens: dict[str, WriteToken] = {}
         self._connected = False
+        self._fts_fallback_count = 0  # FTS检索降级计数 (监控用)
 
     def connect(self) -> None:
         """Connect to the database and create schema.
@@ -655,6 +656,7 @@ class MinervaStore:
                 return [self._row_to_node(r) for r in rows]
             except (sqlite3.OperationalError, sqlite3.OperationalError) as e:
                 logger.warning("FTS search failed, falling back to LIKE: %s", e)
+                self._fts_fallback_count += 1
 
             # Fallback to LIKE search
             try:

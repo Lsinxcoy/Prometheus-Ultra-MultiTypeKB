@@ -28,3 +28,6 @@ archive/compiled/
 wal_logs/
 ultra_9200.log
 monitor_run.log
+monitor_baseline.json
+monitor_run.log
+monitor_A.log

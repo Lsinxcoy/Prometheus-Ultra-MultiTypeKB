@@ -63,6 +63,7 @@ class SignalFusionLayer:
         # 阈值自适应（全部 7 个）
         self._last_threshold_adjust: dict[str, float] = {}
         self._adjust_cooldown = 300
+        self._invalid_count = 0  # 融合层 invalid 触发计数 (监控用)
 
     def subscribe(self, bus: Any) -> None:
         """订阅所有管道完成事件，用于链追踪和合并反馈。"""
