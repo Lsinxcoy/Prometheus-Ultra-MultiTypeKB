@@ -179,10 +179,25 @@ class CIPEventBus:
                     "error": str(e)[:200],
                     "ts": time.time(),
                 })
-        
-        # 限制死信队列
+                # 事件总线死角修复: 订阅者处理失败必须暴露到日志, 否则失败被静默
+                # 记入死信队列而无人知晓 (监控盲区)。event_bus 处于关键生命周期
+                # 路径 (capability_consumed / *_completed 等), 静默失败 = 子系统
+                # 不可见的退化 —— 与 cycle1 安全门 fail-closed / cycle3 收件箱
+                # 裸 pass 同一类"表面正常、真实丢失"的根因。
+                logger.error(
+                    "CIPEventBus: handler failed | topic=%r event_id=%s sub_id=%s: %s",
+                    topic, event_id, sub["id"], e,
+                )
+
+        # 限制死信队列: 超出上限时仅保留最近的 dead_letter_limit 条, 并显式
+        # 记录被丢弃的死信 (避免无声丢失 —— 原实现既丢弃又无任何日志)。
         if len(self._dead_letters) > self._dead_letter_limit:
-            self._dead_letters = self._dead_letters[-self._dead_letter_limit // 2:]
+            dropped = len(self._dead_letters) - self._dead_letter_limit
+            self._dead_letters = self._dead_letters[-self._dead_letter_limit:]
+            logger.warning(
+                "CIPEventBus: dead-letter queue exceeded limit=%d, dropped %d oldest dead letters",
+                self._dead_letter_limit, dropped,
+            )
         
         self._stats["delivered"] += delivered
         self._stats["failed"] += failed
