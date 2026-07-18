@@ -187,6 +187,26 @@ def _check_tool_output(content: str) -> list[CheckResult]:
             detail=f"length ({length}) within limit ({_TOOL_OUTPUT_MAX})",
         ))
 
+    # Injection screening — MPBench (arXiv 2606.04329) Section 3 names
+    # TOOL_OUTPUT (trust=0.2, external unvalidated data) as the #1 injection
+    # vector. The guard previously screened only RETRIEVED_CONTEXT, silently
+    # letting prompt-injection payloads from the least-trusted channel pass
+    # Gate 0.8 in life.py:1017. Reuse the shared _detect_injection helper.
+    injections = _detect_injection(content)
+    if injections:
+        for inj in injections:
+            results.append(CheckResult(
+                name="no_injection_patterns",
+                passed=False,
+                detail=inj,
+            ))
+    else:
+        results.append(CheckResult(
+            name="no_injection_patterns",
+            passed=True,
+            detail="no injection-like patterns detected",
+        ))
+
     return results
 
 
@@ -235,6 +255,25 @@ def _check_user_message(content: str) -> list[CheckResult]:
             name="not_repetitive",
             passed=True,
             detail="content has sufficient character diversity",
+        ))
+
+    # Injection / social-engineering screening — MPBench Section 3 lists
+    # USER_MESSAGE as a social-engineering vector via crafted inputs. Mirror the
+    # RETRIEVED_CONTEXT checker so adversarial prompts are rejected here too,
+    # instead of only being screened on the RETRIEVED_CONTEXT channel.
+    injections = _detect_injection(content)
+    if injections:
+        for inj in injections:
+            results.append(CheckResult(
+                name="no_injection_patterns",
+                passed=False,
+                detail=inj,
+            ))
+    else:
+        results.append(CheckResult(
+            name="no_injection_patterns",
+            passed=True,
+            detail="no injection-like patterns detected",
         ))
 
     return results
