@@ -203,6 +203,20 @@ class DAGExecutor:
         """
         self._execution_count += 1
 
+        # ── Boundary validation (type/enum guard) ──
+        # `escalation` is a raw string from the caller. EscalationAction(...)
+        # is constructed deep inside the execution loop; an invalid value
+        # would raise an opaque ValueError *after* the failed node is already
+        # marked FAILED and appended — leaving the DAG in inconsistent partial
+        # state with a confusing error. Validate at the boundary instead:
+        # fail-fast, fail-loud, with the list of valid actions.
+        valid_actions = [a.value for a in EscalationAction]
+        if escalation not in valid_actions:
+            raise ValueError(
+                f"Invalid escalation action {escalation!r}; "
+                f"valid actions are: {valid_actions}"
+            )
+
         # ── Phase 1: Planning ──
         plan = self._planner.plan(self._nodes)
         if not plan["valid"]:

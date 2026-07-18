@@ -1,0 +1,109 @@
+[OK] health: {'status': 'healthy', 'service': 'prometheus-ultra', 'engine_health': 'healthy', 'detail': 'engine o
+[OK] recall: 7
+[OK] learn(arxiv+T4): compiled
+[OK] evolve: ok
+[OK] maintain: ok
+[OK] t4_compile: compiled
+[OK] metrics: 采集完成
+✅ **Ultra 系统监控报告** — 2026-07-19 07:37:08
+
+**健康检查**: ⚠️ 异常
+**状态**: 节点:1320 | 机制:25 | 启用:7 | 效用:0.6995 | 宿主:hermes
+
+**七管道实跑结果**:
+| 管道 | 状态 | 耗时 | 说明 |
+|------|------|------|------|
+| 健康探针 | ✅ OK | 0.01s | 通过 |
+| 记忆检索 recall | ✅ OK | 2.3s | hits=7 |
+| 知识吸收 learn (arXiv+T4) | ✅ OK | 1.57s | compiled=False |
+| 自进化 evolve | ✅ OK | 0.77s | 通过 |
+| 记忆维护 maintain | ✅ OK | 0.12s | consolidated=16 |
+| T4 机制编译 | ✅ OK | 17.98s | 通过 |
+| 指标采集 | ✅ OK | 20.35s | 通过 |
+
+**记忆知识库**:
+- 节点总数: 1320　全局效用: 0.6995
+- 类型分布: {'FACT': 471, 'CONCEPT': 767, 'PROCEDURE': 63, 'PAPER': 17, 'PROJECT': 2}
+
+**机制引擎**:
+- 总数: 25　启用: 7　禁用: 13　注册: 6
+- 待剪枝候选: 0
+
+**自进化引擎**:
+- 代数: 10　种群: 50　收敛: True（max_generations）
+- 上次链路: SUCCESS　真实适应度 0.6491134891731624 → 0.6991134891731624（0.76s）
+- 进化基因维度: 1 项
+
+**适应度分解 (10维)**:
+- 总适应度: 0.7717　旧7维: memory=0.3 diversity=0.08 evolution=0.0 health=0.15 harness=0.05 utility=0.0699 energy=0.0202
+- 【新三维】多类型覆盖: 0.1　机制消费率: 0.0015　反刍产出率: 0.0
+
+**机制消费率 (全6类聚合)**:
+- 总机制: 3229　已消费: 49　消费率: 0.0152
+  - mechanism_registry: 3/25
+  - skill_registry: 0/0
+  - speculative_genes: 0/1
+  - handbook: 45/3195
+  - instincts: 1/1
+  - harness_x: 0/7
+
+**反刍机制 (温故知新)**:
+- 上次全量: 1h0m前　上次增量: 0h22m前
+- 历史次数: 4　下次模式: skip
+- 距下次全量: 300m　距下次增量: 7m
+
+**学习到的论文 (store PAPER 节点, 共 17 篇)**:
+  - DOME: Recommendations for supervised machine learning valida (utility=1.0)
+  - Machine learning with sklearn: <p>This chapter’s goal is to  (utility=1.0)
+  - Particle production from bubble collisions: Collisions of ul (utility=0.85)
+  - Hierarchical Denoising For Multi-Step Visual Reasoning: Vide (utility=0.85)
+  - Partition, Prompt, Aggregate: Statistical Self-Consistency i (utility=0.85)
+  - Partition, Prompt, Aggregate: Statistical Self-Consistency i (utility=0.85)
+  - RoboTTT: Context Scaling for Robot Policies: Recent robot fo (utility=0.85)
+  - Changing Data Sources in the Age of Machine Learning for Off (utility=0.82)
+
+**宿主集成**: ✅ hermes（适配器 HermesAdapter）
+
+**论文知识库（共 6 篇）**:
+- 评级分布: {'PARTIAL': 3, 'MATCH': 3}
+  - [PARTIAL] Rethink Causal Mask Attention for VL（2505.18605，V2.4 P1-a）
+  - [PARTIAL] Modality-Mutual Attention (HeRA)（2606.23885，V2.4 P1-c）
+  - [MATCH] Learning to Focus (Grad Token Pruning)（2506.07851，V2.3 P0-a）
+  - [PARTIAL] Overlapped-Frame Fusion (Speech)（2501.12004，V2.4b P1-d）
+  - [MATCH] Mind the Gap (Thought Leap)（2505.14684，V2.3 P0-b）
+
+**🔍 分级深度检测（共 15 项: 0 critical / 5 warning / 10 info）**:
+🟡 [孤岛机制-触发路径缺失] 1 个非探索性机制注册但从未被消费(可能真bug)
+     证据: registry:z_mech
+     建议: 建议: 检查是否有管道应调用但未调用
+🟡 [安全边界突破] Owner-Harm 边界突破 127 次(偏高, 需查)
+     证据: violations=127
+     建议: 建议: 查 violation 具体内容判良性/恶性
+🟡 [消费率漂移] 消费率 0.0152 较基线 0.021 降 27%
+     证据: baseline=0.021
+     建议: 建议: 机制消费在缓慢退化
+🟡 [知识未消化] KTA 扫描 50 个高utility节点未翻译为机制 (知识堆积)
+     证据: kta_untranslated=50
+     建议: 建议: 检查 knowledge_to_mechanism 转换链路
+🟡 [依赖深度-传递性孤岛] 16 个上游孤岛(learn_/semantic_evo_/academic) 失活会连带下游机制
+     证据: registry:learn_blog, registry:learn_github, registry:learn_newsletter, registry:semantic_evo_g2, registry:learn_arxiv:2401.12345, registry:s
+     建议: 建议: 优先修复上游数据源触发路径(真bug集中区)
+🟢 [孤岛机制-测试残留] 4 个测试/临时机制从未消费
+     证据: registry:test_compiled_mech, registry:test_extracted_mech, registry:p_mech, registry:c1_mech
+     建议: 建议: 清理机制注册表测试残留
+🟢 [孤岛机制-孤儿注册] 11 个源机制残留(learn_*/scan_*) 注册表从未被消费
+     证据: registry:learn_arxiv:2401.12345, registry:learn_web, registry:learn_arxiv, registry:learn_github, registry:learn_wiki, registry:learn_hacker
+     建议: 建议: learn管道直连scanner, 可从注册表删除减负
+🟢 [孤岛机制-合理休眠] 6 个探索性/待定机制尚未触发(观察)
+🟢 [LLM路径可用] llm_bridge.mode=anthropic available=True
+🟢 [FTS检索降级] 全文检索降级 24 次(转LIKE)
+     证据: fts_fallback=24
+     建议: 建议: 检查 FTS5 查询语法
+🟢 [数据流贯通-remember→search] 写入的节点可被 search 检索到 (贯通正常)
+🟢 [数据流贯通-learn→store] learn(arxiv) 产出 1 节点 (落库正常)
+🟢 [数据流-rumination] rumination 引擎在线 (周期触发由心跳/learn 驱动)
+🟢 [语义相关性-学习质量] 近期 400 个节点低utility占比 0% (质量正常)
+🟢 [依赖深度-表面孤岛] 当前表面孤岛 22 个, 传递性孤岛 16 个
+
+**总结**: 🟡 Ultra 有 5 项 warning (触发缺失/过程层失效/漂移), 待观察或修复
+[feishu] sent ok msg_id=om_x100b6af4ad1004a4c27a8eaf328b8e3
