@@ -822,6 +822,21 @@ class UltraAPIServer:
                     source_health = {}
                 summary["source_health"] = source_health
 
+                # ── 反刍(温故知新)状态 (修复监控对反刍失明) ──
+                try:
+                    rstats = o.rumination_engine.get_stats()
+                    due = o.rumination_engine.next_rumination_due()
+                    summary["rumination"] = {
+                        "last_full": rstats.get("last_full", 0.0),
+                        "last_incremental": rstats.get("last_incremental", 0.0),
+                        "history_len": rstats.get("history_len", 0),
+                        "next_mode": due.get("mode", "skip"),
+                        "seconds_to_full": due.get("seconds_to_full", 0),
+                        "seconds_to_incremental": due.get("seconds_to_incremental", 0),
+                    }
+                except Exception:
+                    summary["rumination"] = {}
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:
