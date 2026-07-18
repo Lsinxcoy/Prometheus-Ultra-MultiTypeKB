@@ -105,7 +105,10 @@ class ForbiddenPatternDetector:
         for p in self._patterns:
             try:
                 self._compiled[p["id"]] = re.compile(p["pattern"], re.IGNORECASE)
-            except re.error:
+            except re.error as e:
+                # 安全相关: 编译失败的禁区模式不可静默丢弃 —— 必须显式暴露,
+                # 否则该模式永不生效却仍计入 stats(虚假覆盖), 削弱 remember 安全门
+                logger.error("ForbiddenPatternDetector: default pattern %r failed to compile, rule DISABLED: %s", p["id"], e)
                 self._compiled[p["id"]] = None
     
     def check(self, content: str) -> list[dict]:
@@ -154,25 +157,31 @@ class ForbiddenPatternDetector:
         return violations
     
     def add_pattern(self, pattern_id: str, pattern: str, severity: str = "warning",
-                    description: str = ""):
+                    description: str = "") -> None:
         """添加自定义检测规则.
-        
+
         Args:
             pattern_id: 规则ID
-            pattern: 正则表达式
+            pattern: 正则表达式(必须是合法正则)
             severity: 严重级别
             description: 描述
+
+        Raises:
+            ValueError: 当 pattern 不是合法正则表达式时. 安全相关 —— 拒绝静默丢弃,
+                调用方必须处理(否则该禁区模式会被无声漏防, 削弱 remember 安全门).
         """
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE)
+        except re.error as e:
+            logger.error("ForbiddenPatternDetector: pattern %r failed to compile, NOT added: %s", pattern_id, e)
+            raise ValueError(f"Invalid regex for forbidden pattern {pattern_id!r}: {e}") from e
         self._patterns.append({
             "id": pattern_id,
             "pattern": pattern,
             "severity": severity,
             "description": description,
         })
-        try:
-            self._compiled[pattern_id] = re.compile(pattern, re.IGNORECASE)
-        except re.error:
-            self._compiled[pattern_id] = None
+        self._compiled[pattern_id] = compiled
     
     def add_to_whitelist(self, pattern_id: str):
         """添加到白名单.
@@ -213,6 +222,7 @@ class ForbiddenPatternDetector:
             "total_violations": self._total_violations,
             "violation_rate": round(self._total_violations / max(self._total_checks, 1), 4),
             "patterns_count": len(self._patterns),
+            "effective_patterns": sum(1 for c in self._compiled.values() if c is not None),
             "whitelist_count": len(self._whitelist),
             "severity_distribution": severity_counts,
         }
