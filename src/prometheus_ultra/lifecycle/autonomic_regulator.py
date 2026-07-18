@@ -63,7 +63,10 @@ class AutonomicRegulator:
         """reflect 完成后——检查系统自检质量。"""
         try:
             data = event.get("data", {})
-            score = data.get("composite_score", 0.5) or 0.5
+            # 类型边界修复(cycle-30): 合法 0.0 是最差反思分, 绝不能被 `or 0.5` 误掩为 0.5
+            # (否则 `score < 0.4` 退化检测对真实零分永不触发)。仅缺失/显式 None 才回退 0.5。
+            raw_score = data.get("composite_score", 0.5)
+            score = float(raw_score) if raw_score is not None else 0.5
             drift_count = len(data.get("drift_alerts", [])) if isinstance(data.get("drift_alerts"), (list, tuple)) else (data.get("drift_alerts", 0) or 0)
             # Low reflect score + high drift → system in decline
             if score < 0.4 and drift_count > 2:
