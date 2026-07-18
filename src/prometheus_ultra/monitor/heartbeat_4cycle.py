@@ -140,15 +140,15 @@ class Heartbeat4Cycle:
         return result
     
     def _devour_cycle(self) -> tuple[list[str], dict]:
-        """Devour: Scan for new skills from external sources.
-        
-        Real implementation scans:
-        1. HuggingFace skill repositories
-        2. GitHub trending repos
-        3. arXiv papers with code
+        """Devour: Install bootstrap seed skills into the registry.
+
+        NOTE (honesty): External skill scanning is NOT implemented. This cycle
+        installs a static bootstrap seed list (see _bootstrap_seed_skills),
+        NOT skills discovered from HuggingFace/GitHub/arXiv. A WARNING is logged
+        so operators are not misled into thinking external sources were queried.
         """
         actions = []
-        new_skills = self._scan_external_sources()
+        new_skills = self._bootstrap_seed_skills()
         
         for skill in new_skills:
             if skill["name"] not in self._skill_registry:
@@ -162,19 +162,29 @@ class Heartbeat4Cycle:
                 actions.append(f"installed_skill_{skill['name']}")
                 logger.info("Devour: installed skill %s", skill["name"])
         
-        actions.append(f"scanned_{len(new_skills)}_sources")
+        actions.append(f"seeded_{len(new_skills)}_bootstrap_candidates")
+        logger.warning(
+            "Heartbeat4Cycle.devour: external skill scanning is DISABLED — "
+            "the %d bootstrap candidates are a static seed list, NOT discovered "
+            "from external sources (HuggingFace/GitHub/arXiv). No external API queried.",
+            len(new_skills),
+        )
         self._save_registry()
         
         return actions, {"new_skills": len(new_skills), "total_skills": len(self._skill_registry)}
     
-    def _scan_external_sources(self) -> list[dict]:
-        """Scan external sources for new skills.
-        
-        Returns:
-            List of candidate skills discovered.
+    def _bootstrap_seed_skills(self) -> list[dict]:
+        """Return a STATIC bootstrap seed list of candidate skills.
+
+        IMPORTANT (honesty contract): External skill scanning is NOT implemented.
+        The docstring previously claimed this method "scans HuggingFace skill
+        repositories / GitHub trending repos / arXiv papers with code", but it
+        never performed any network I/O — it returns a hardcoded static list.
+        This seed only bootstraps an empty skill registry; callers MUST NOT
+        report these candidates as "discovered from external sources".
+        No external API is queried.
         """
-        # Real implementation would check external APIs
-        # For now, return realistic candidates based on current AI trends
+        # Static bootstrap seed — NOT an external scan.
         candidates = [
             {"name": "rag_optimization", "type": "optimization", "description": "Optimize RAG retrieval strategies using adaptive chunking and hybrid search"},
             {"name": "context_window_management", "type": "memory", "description": "Dynamic context window management with token budget allocation"},
