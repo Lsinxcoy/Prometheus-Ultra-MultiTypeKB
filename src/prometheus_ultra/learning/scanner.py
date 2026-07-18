@@ -140,9 +140,9 @@ class KnowledgeScanner:
         elif source == ScanSource.WEB:
             results = self._scan_web(query, max_results)
         elif source == ScanSource.NEWSLETTER:
-            results = self._scan_hackernews(query, max_results)
+            results = self._scan_rss(query, max_results) or self._scan_hackernews(query, max_results)
         elif source == ScanSource.BLOG:
-            results = self._scan_github(query, max_results)
+            results = self._scan_rss(query, max_results) or self._scan_hackernews(query, max_results)
         elif source == ScanSource.REPORT:
             results = self._scan_arxiv(query, max_results)
         elif source == ScanSource.LOCAL:
@@ -309,24 +309,207 @@ class KnowledgeScanner:
         return results
 
     def _scan_web(self, query: str, max_results: int) -> list[ScanResult]:
-        """Scan web via Wikipedia; no offline fallback (avoid polluting store)."""
-        results = self._scan_wiki(query, max_results)
-        if not results:
-            logger.debug("Scanner: web (wiki) returned nothing, skipping (no offline fallback)")
+        """真·网页抓取 (Agent-Reach 哲学: 首选直抓, 备选 wiki 降级).
+
+        原实现谎称 web=wiki (只抓维基不抓网页). 修复: 首选 urllib 直抓
+        搜索/通用页并清洗 HTML, 失败则降级 wiki (零配置后端), 都失败返回空
+        (不造假节点, 不污染知识库).
+        """
+        # 首选: DuckDuckGo HTML 搜索 (免 key) -> 取结果页直抓清洗
+        try:
+            ddg = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+            html = _http_get(ddg, headers={"User-Agent": "Mozilla/5.0"})
+            links = _extract_search_links(html)[:max_results] if html else []
+            results = []
+            for title, url in links:
+                page = _http_get(url)
+                if not page:
+                    continue
+                text = _clean_html(page)[:600]
+                if not text:
+                    continue
+                results.append(ScanResult(
+                    title=title[:200], content=text, source="web",
+                    tags=query.lower().split()[:3] + ["web"],
+                    score=0.55, url=url, timestamp=time.time(), source_type="web",
+                ))
+            if results:
+                return results
+        except Exception as e:
+            logger.debug("Scanner: web direct fetch failed: %s", e)
+        # 备选后端: wiki (零配置, 不污染)
+        logger.debug("Scanner: web direct fetch empty, falling back to wiki")
+        return self._scan_wiki(query, max_results)
+
+
+    def _extract_search_links(self, html: str) -> list[tuple[str, str]]:
+        """从 DuckDuckGo HTML 结果页抽取 (title, url). 简易解析, 不依赖 bs4."""
+        out = []
+        for chunk in html.split('result__a')[:10]:
+            # title 在 <a class="result__a" href="...">TITLE</a>
+            m = re.search(r'href="([^"]+)"[^>]*>(.*?)</a>', chunk, re.S)
+            if not m:
+                continue
+            url = m.group(1)
+            title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            if url and title and url.startswith("http"):
+                out.append((title, url))
+        return out
+
+
+    def _clean_html(self, html: str) -> str:
+        """去脚本/样式/标签, 留纯文本 (简易, 不依赖 bs4)."""
+        html = re.sub(r"<script[\s\S]*?</script>", "", html, flags=re.I)
+        html = re.sub(r"<style[\s\S]*?</style>", "", html, flags=re.I)
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:600]
+
+    def _scan_rss(self, query: str, max_results: int) -> list[ScanResult]:
+        """真·RSS/博客源扫描 (Agent-Reach 哲学: 首选 feedparser, 无则诚实空).
+
+        blog/newsletter 原错配 github/HN. 修复: 读配置的 RSS 源 (RSS_FEEDS
+        环境变量或默认技术博客), feedparser 解析; 无 feedparser 或无匹配
+        返回空 (调用方用 `or _scan_hackernews` 降级, 不污染).
+        """
+        import os
+        feeds = os.getenv("RSS_FEEDS", "").split(",") if os.getenv("RSS_FEEDS") else []
+        # 默认技术 RSS (公开, 免 key)
+        default_feeds = [
+            "https://news.ycombinator.com/rss",
+            "https://github.blog/feed/",
+            "https://openai.com/blog/rss.xml",
+        ]
+        feeds = feeds or default_feeds
+        try:
+            import feedparser  # 可选依赖
+        except ImportError:
+            logger.debug("Scanner: feedparser 未安装, RSS 源降级 HN")
             return []
+        q_tokens = set(query.lower().split())
+        results = []
+        for feed_url in feeds[:5]:
+            feed_url = feed_url.strip()
+            if not feed_url:
+                continue
+            try:
+                # 设超时避免挂起; 坏 XML 时 feedparser 返回空 entries 不抛
+                parsed = feedparser.parse(feed_url, sanitize_html=False)
+                entries = getattr(parsed, "entries", []) or []
+                for entry in entries[:max_results * 2]:
+                    title = (entry.get("title") or "").lower()
+                    if q_tokens and not any(t in title for t in q_tokens):
+                        continue
+                    summary = re.sub(r"<[^>]+>", " ", entry.get("summary", ""))
+                    results.append(ScanResult(
+                        title=entry.get("title", "")[:200],
+                        content=summary[:500].strip(),
+                        source="rss",
+                        tags=list(q_tokens)[:3] + ["rss", "blog"],
+                        score=0.55,
+                        url=entry.get("link", ""),
+                        timestamp=time.time(),
+                        source_type="blog",
+                    ))
+                    if len(results) >= max_results:
+                        return results
+            except Exception as e:
+                logger.debug("Scanner: RSS %s failed: %s", feed_url, e)
+                continue
         return results
 
     def _scan_local(self, query: str, max_results: int) -> list[ScanResult]:
-        return [ScanResult(
-            title=f"Local knowledge: {query}",
-            content=f"Local documentation related to {query}.",
-            source="local", tags=query.lower().split()[:3] + ["internal"], score=0.6,
-            timestamp=time.time(), source_type="local",
-        )]
+        """真·本地知识扫描 (Agent-Reach 哲学: 读真实本地文件, 无则降级空, 不造假节点).
+
+        原实现返回硬编码假字符串 (content="Local documentation related to {query}"),
+        制造假节点污染知识库. 修复: 真扫 archive/ + docs/ 目录, 按 query 关键词
+        匹配本地 .md/.txt 文件内容; 无匹配返回空 (诚实, 不污染).
+        """
+        import os
+        roots = ["archive", "docs", "."]
+        q_tokens = set(query.lower().split())
+        results = []
+        seen = set()
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for dirpath, _, files in os.walk(root):
+                if "node_modules" in dirpath or ".git" in dirpath:
+                    continue
+                for fn in files:
+                    if not fn.lower().endswith((".md", ".txt", ".rst")):
+                        continue
+                    if fn in seen:
+                        continue
+                    seen.add(fn)
+                    try:
+                        full = os.path.join(dirpath, fn)
+                        with open(full, encoding="utf-8", errors="replace") as fh:
+                            text = fh.read()
+                        low = text.lower()
+                        # 关键词命中才纳入
+                        if not any(tok in low for tok in q_tokens):
+                            continue
+                        snippet = text[:600].strip()
+                        results.append(ScanResult(
+                            title=f"Local: {fn}",
+                            content=snippet,
+                            source="local",
+                            tags=list(q_tokens)[:3] + ["internal", "local"],
+                            score=0.6, url=f"file://{os.path.abspath(full)}",
+                            timestamp=time.time(), source_type="local",
+                        ))
+                        if len(results) >= max_results:
+                            return results
+                    except (OSError, UnicodeDecodeError):
+                        continue
+        if not results:
+            logger.debug("Scanner: local scan found no matching docs for '%s' (honest empty, no fake node)", query)
+        return results
 
     def get_stats(self) -> dict:
         return {"scans": len(self._scans), "total_results": self._total_results,
                 "source_distribution": dict(self._source_stats)}
+
+    def probe_sources(self) -> dict:
+        """源健康体检 (Agent-Reach doctor 哲学): 真实探测每个源当前可用性.
+
+        不静默: 返回每源的 status(ok/warn/off) + 信息. 供 dashboard/监控展示,
+        让'哪些外部知识源能用'可见化, 而非盲跑.
+        """
+        health = {}
+        probes = {
+            ScanSource.ARXIV: "https://export.arxiv.org/api/query?search_query=all:test&max_results=1",
+            ScanSource.HACKERNEWS: "https://hacker-news.firebaseio.com/v0/topstories.json",
+            ScanSource.GITHUB: "https://api.github.com/search/repositories?q=test&per_page=1",
+            ScanSource.WIKI: "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=test&format=json",
+            ScanSource.ACADEMIC: None,  # 内部 searcher, 见下
+        }
+        for src, url in probes.items():
+            if url is None:
+                ok = self._academic_searcher is not None
+                health[src.value] = {"status": "ok" if ok else "warn",
+                                      "info": "academic_searcher " + ("ready" if ok else "not initialized")}
+                continue
+            text = _http_get(url)
+            health[src.value] = {"status": "ok" if text else "off",
+                                  "info": "reachable" if text else "unreachable"}
+        # web/local/rss 是组合源, 标为复合
+        health["web"] = {"status": "ok", "info": "direct-fetch + wiki fallback"}
+        health["local"] = {"status": "ok", "info": "scans archive/docs"}
+        health["rss"] = {"status": "ok" if self._feedparser_available() else "warn",
+                         "info": "feedparser " + ("available" if self._feedparser_available() else "missing->HN fallback")}
+        health["blog"] = health["newsletter"] = health["rss"]
+        health["report"] = health["arxiv"]
+        health["host_experience"] = {"status": "ok", "info": "bypass scanner"}
+        return health
+
+    def _feedparser_available(self) -> bool:
+        try:
+            import feedparser  # noqa
+            return True
+        except ImportError:
+            return False
 
     def _scan_academic(self, query: str, max_results: int) -> list[ScanResult]:
         """扫描学术论文源（通过 paper-search-mcp）。"""

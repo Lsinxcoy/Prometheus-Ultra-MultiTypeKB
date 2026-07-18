@@ -815,6 +815,13 @@ class UltraAPIServer:
                     cons = {}
                 summary["mechanism_consumption"] = cons
 
+                # ── 外部知识源健康体检 (Agent-Reach doctor 哲学) ──
+                try:
+                    source_health = o.knowledge_scanner.probe_sources()
+                except Exception:
+                    source_health = {}
+                summary["source_health"] = source_health
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:

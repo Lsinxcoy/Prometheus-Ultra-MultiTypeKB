@@ -923,8 +923,9 @@ class Omega:
 
         # 自发心跳线程 — 每60分钟自动触发 learn，CNS 链完成剩余管道
         self._heartbeat_interval = 3600  # 60分钟
-        # 源轮转: 自动学习不再只抓 web, 轮转多源让论文/代码/百科节点也能自动积累
-        self._hb_sources = ["web", "arxiv", "github", "wiki", "academic", "newsletter"]
+        # 源轮转: 覆盖全部外部知识源(不舍弃任何一个), 让论文/代码/百科/RSS/本地都能自动积累
+        self._hb_sources = ["web", "arxiv", "github", "wiki", "academic", "hackernews",
+                             "newsletter", "blog", "report", "local", "host_experience", "rss"]
         self._hb_src_i = 0
         self._heartbeat_running = True
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
