@@ -33,13 +33,12 @@ def _isolate_store_db(monkeypatch):
 def pytest_collection_modifyitems(config, items):
     """集成 server 测试需外部/真实 server, 无 RUN_SERVER_TESTS 环境变量时跳过。
 
-    原因: test_hermes_integration 要求手动启动外部 API server(端口9200);
-    test_api_server 的 TestStart/TestStop 启动真实 uvicorn, 端口占用时
-    线程内 sys.exit(1) 成为未处理异常, 污染后续所有测试(已实测复现:
-    test_api_server 之后紧跟的纯单元测试被连带标记失败)。
+    test_hermes_integration 需手动启动外部 API server(端口9200) → 跳过。
 
-    单元 E2E 套件不该包含这些集成测试。需要验证 server 时:
-        RUN_SERVER_TESTS=1 pytest tests/test_api_server.py tests/test_hermes_integration.py
+    test_api_server 的 TestStart/TestStop 现已改用隔离空闲端口 + 真实断言:
+    不再与 9200 实例冲突、stop() 也会真正终止 uvicorn 并释放端口, 不会遗留
+    线程/端口污染后续测试, 故默认运行。修复前它们被整体跳过 → 生命周期零覆盖,
+    且启用时断言为假绿(assert isinstance(e, Exception) / except: pass)。
     """
     if os.environ.get("RUN_SERVER_TESTS") == "1":
         return
@@ -49,8 +48,4 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         path = item.nodeid
         if "test_hermes_integration.py" in path:
-            item.add_marker(skip_server)
-        elif "test_api_server.py" in path and (
-            "TestStart" in path or "TestStop" in path
-        ):
             item.add_marker(skip_server)

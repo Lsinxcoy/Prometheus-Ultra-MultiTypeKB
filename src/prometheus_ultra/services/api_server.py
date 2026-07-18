@@ -859,7 +859,19 @@ class UltraAPIServer:
         Args:
             omega: Pre-initialized Omega instance (optional).
             background: If True, run in background thread.
+
+        Raises:
+            RuntimeError: if the server is already running, or if it fails to
+                become ready (e.g. port already in use, startup crashed) within
+                the readiness window. A "started but not actually listening"
+                state is treated as a failure so callers/tests get a real
+                signal instead of a silent false-positive.
         """
+        if self.is_running:
+            raise RuntimeError(
+                f"Ultra API server already running on {self.host}:{self.port}; "
+                f"call stop() before starting again"
+            )
         if omega:
             self.omega = omega
         elif not self.omega:
@@ -874,12 +886,15 @@ class UltraAPIServer:
             access_log=False,
         )
         server = uvicorn.Server(config)
+        self._uvicorn_server = server
 
         if background:
             self._server_thread = threading.Thread(target=server.run, daemon=True)
             self._server_thread.start()
             logger.info("Ultra API server starting on %s:%d (background)", self.host, self.port)
-            # Wait for server to be ready
+            # Wait for server to be ready. Fail-LOUD on timeout: never return
+            # "success" while nothing is actually listening (a silent false start
+            # would mislead keepalive/monitor and any caller of start()).
             import time as _time
             for _ in range(30):
                 try:
@@ -891,12 +906,31 @@ class UltraAPIServer:
                     return
                 except Exception:
                     _time.sleep(0.2)
-            logger.warning("Server may not be ready yet")
+            raise RuntimeError(
+                f"Ultra API server failed to become ready on {self.host}:{self.port} "
+                f"within the readiness window (port in use or startup crashed?)"
+            )
         else:
             server.run()
 
     def stop(self):
-        """Stop the server and close Omega."""
+        """Stop the server and close Omega.
+
+        Actually terminates the uvicorn server (signals graceful exit and joins
+        the run thread) so the port is released. A no-op stop that leaves the
+        HTTP server running would give a false "stopped" signal and leak the
+        listening port across tests / restarts.
+        """
+        uvicorn_server = getattr(self, "_uvicorn_server", None)
+        if uvicorn_server is not None:
+            try:
+                uvicorn_server.should_exit = True
+            except Exception:
+                pass
+        thread = self._server_thread
+        if thread is not None:
+            thread.join(timeout=5)
+            self._server_thread = None
         if self.omega:
             self.omega.close()
             self.omega = None
