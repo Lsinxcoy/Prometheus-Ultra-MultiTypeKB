@@ -1,0 +1,237 @@
+{
+ "mechanisms": {
+  "semantic_evo_g1": {
+   "name": "semantic_evo_g1",
+   "data": {
+    "concepts": {
+     "attention": 0,
+     "transformer": 0
+    },
+    "promoted": 0,
+    "pruned": 0,
+    "derived_specs": {}
+   },
+   "dependencies": [],
+   "category": "semantic_evolution",
+   "status": "registered",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "semantic_evo_g2": {
+   "name": "semantic_evo_g2",
+   "data": {
+    "concepts": {
+     "AI": 0,
+     "wikipedia": 0,
+     "reference": 0,
+     "rail_t1": 0,
+     "rail_t2": 0,
+     "Shell": 0,
+     "github": 0,
+     "open-source": 0,
+     "cs.CV": 0,
+     "hourly_maintain": 0,
+     "ultra": 0,
+     "math.NA": 0,
+     "math-ph": 0
+    },
+    "promoted": 0,
+    "pruned": 0,
+    "derived_specs": {}
+   },
+   "dependencies": [],
+   "category": "semantic_evolution",
+   "status": "registered",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "test_compiled_mech": {
+   "name": "test_compiled_mech",
+   "data": {
+    "paper": "2607.13285",
+    "draft_code": "x",
+    "target_location": {
+     "module": "m",
+     "lineno": 1
+    }
+   },
+   "dependencies": [],
+   "category": "compiled",
+   "status": "pending",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "test_extracted_mech": {
+   "name": "test_extracted_mech",
+   "data": {
+    "gene_specs": {
+     "ext_lr": [
+      0.0,
+      1.0
+     ],
+     "ext_momentum": [
+      0.0,
+      0.9
+     ]
+    }
+   },
+   "dependencies": [],
+   "category": "extracted",
+   "status": "pending",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "bad_mech": {
+   "name": "bad_mech",
+   "data": {
+    "draft_code": "x"
+   },
+   "dependencies": [],
+   "category": "compiled",
+   "status": "disabled",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": 1784324659.2902796,
+   "consumed_at": 1784324659.2902796,
+   "emit_accepted": false
+  },
+  "t4_pending_explore": {
+   "name": "t4_pending_explore",
+   "data": {
+    "trigger": "external_evolution",
+    "rail": "T4",
+    "fitness": 0.3
+   },
+   "dependencies": [],
+   "category": "compilation_pending",
+   "status": "registered",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "p_mech": {
+   "name": "p_mech",
+   "data": {
+    "gene_specs": {
+     "persist_gene": [
+      0.1,
+      0.9
+     ]
+    }
+   },
+   "dependencies": [],
+   "category": "extracted",
+   "status": "pending",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "c1_mech": {
+   "name": "c1_mech",
+   "data": {
+    "paper": "x",
+    "draft_code": "y",
+    "target_location": {
+     "module": "m"
+    }
+   },
+   "dependencies": [],
+   "category": "compiled",
+   "status": "pending",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "good_t3": {
+   "name": "good_t3",
+   "data": {
+    "gene_specs": {
+     "g1": [
+      0,
+      1
+     ]
+    }
+   },
+   "dependencies": [],
+   "category": "extracted",
+   "status": "active",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": 1784324659.5802872,
+   "consumed_at": 1784324659.5802872
+  },
+  "bad_t4": {
+   "name": "bad_t4",
+   "data": {
+    "draft_code": "x",
+    "target_location": {}
+   },
+   "dependencies": [],
+   "category": "compiled",
+   "status": "disabled",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": 1784324659.5822673,
+   "consumed_at": 1784324659.5822673,
+   "emit_accepted": false
+  },
+  "z_mech": {
+   "name": "z_mech",
+   "data": {
+    "draft_code": "x",
+    "target_location": {}
+   },
+   "dependencies": [],
+   "category": "compiled",
+   "status": "pending",
+   "invoke_count": 0,
+   "error_count": 0,
+   "last_invoked": null,
+   "activated_at": null
+  },
+  "learn_arxiv:2401.12345": {
+   "name": "learn_arxiv:2401.12345",
+   "data": {
+    "query": "",
+    "count": 0
+   },
+   "dependencies": [],
+   "category": "general",
+   "status": "disabled",
+   "invoke_count": 1,
+   "error_count": 0,
+   "last_invoked": 1784340539.5728545,
+   "activated_at": null
+  },
+  "learn_web": {
+   "name": "learn_web",
+   "data": {
+    "query": "auto heartbeat",
+    "count": 1
+   },
+   "dependencies": [],
+   "category": "general",
+   "status": "disabled",
+   "invoke_count": 1,
+   "error_count": 0,
+   "last_invoked": 1784344732.2902646,
+   "activated_at": null
+  },
+  "ext_x": {
+   "name": "ext_x",
+   "data": {
+    "executable": 

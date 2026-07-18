@@ -153,9 +153,26 @@ class CIPEventBus:
         delivery_log = []
         
         for sub in all_subs:
-            # 过滤
-            if sub["filter_fn"] and not sub["filter_fn"](enriched_event):
-                continue
+            # 过滤 (filter_fn 异常必须隔离: 不能让单个订阅者的过滤器崩溃整个
+            # fan-out, 否则该事件之后所有订阅者被静默跳过 —— 与 cycle 6 handler
+            # 故障隔离同一原则。原实现 filter_fn 调用在 try 之外, 一旦 filter
+            # 抛异常会直接冒泡出 publish() 并中断循环, 既崩发布方又丢后续订阅者)。
+            if sub["filter_fn"]:
+                try:
+                    if not sub["filter_fn"](enriched_event):
+                        continue
+                except Exception as fe:
+                    failed += 1
+                    delivery_log.append({
+                        "sub_id": sub["id"],
+                        "status": "filter_error",
+                        "error": str(fe)[:100],
+                    })
+                    logger.error(
+                        "CIPEventBus: filter_fn failed | topic=%r event_id=%s sub_id=%s: %s",
+                        topic, event_id, sub["id"], fe,
+                    )
+                    continue
             
             # 执行处理器
             try:
