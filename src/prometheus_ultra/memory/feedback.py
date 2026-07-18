@@ -40,11 +40,12 @@ Complexity:
 """
 from __future__ import annotations
 import logging
+import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 
-import time
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
@@ -93,6 +94,11 @@ class NodeFeedbackTracker:
         self._feedbacks: dict[str, list[FeedbackRecord]] = {}
         self._type_counts: Counter = Counter()
         self._total_recorded = 0
+        # RLock: get_worst_performers/get_best_performers re-enter via
+        # get_average/get_feedback_count, so a reentrant lock avoids deadlock
+        # while still serialising concurrent record()/read access from the
+        # main loop and the uvicorn API thread pool.
+        self._lock = threading.RLock()
 
     def record(self, node_id: str, feedback_type: str, value: float,
                metadata: dict | None = None) -> None:
@@ -109,60 +115,68 @@ class NodeFeedbackTracker:
             value=value, timestamp=time.time(),
             metadata=metadata or {},
         )
-        if node_id not in self._feedbacks:
-            self._feedbacks[node_id] = []
-        self._feedbacks[node_id].append(record)
+        with self._lock:
+            if node_id not in self._feedbacks:
+                self._feedbacks[node_id] = []
+            self._feedbacks[node_id].append(record)
 
-        # Truncate if too many
-        if len(self._feedbacks[node_id]) > self._max_per_node:
-            self._feedbacks[node_id] = self._feedbacks[node_id][-self._max_per_node // 2:]
+            # Truncate if too many
+            if len(self._feedbacks[node_id]) > self._max_per_node:
+                self._feedbacks[node_id] = self._feedbacks[node_id][-self._max_per_node // 2:]
 
-        self._type_counts[feedback_type] += 1
-        self._total_recorded += 1
+            self._type_counts[feedback_type] += 1
+            self._total_recorded += 1
 
     def get_average(self, node_id: str) -> float:
         """Get average feedback value for a node."""
-        records = self._feedbacks.get(node_id, [])
-        if not records:
-            return 0.0
-        return sum(r.value for r in records) / len(records)
+        with self._lock:
+            records = self._feedbacks.get(node_id, [])
+            if not records:
+                return 0.0
+            return sum(r.value for r in records) / len(records)
 
     def get_feedback_count(self, node_id: str) -> int:
         """Get total feedback count for a node."""
-        return len(self._feedbacks.get(node_id, []))
+        with self._lock:
+            return len(self._feedbacks.get(node_id, []))
 
     def get_worst_performers(self, top_k: int = 5) -> list[dict]:
         """Get nodes with lowest average feedback."""
-        scored = [(nid, self.get_average(nid), self.get_feedback_count(nid))
-                  for nid in self._feedbacks]
-        scored.sort(key=lambda x: x[1])
-        return [{"node_id": nid, "avg_score": sc, "feedback_count": cnt}
-                for nid, sc, cnt in scored[:top_k]]
+        with self._lock:
+            scored = [(nid, self.get_average(nid), self.get_feedback_count(nid))
+                      for nid in self._feedbacks]
+            scored.sort(key=lambda x: x[1])
+            return [{"node_id": nid, "avg_score": sc, "feedback_count": cnt}
+                    for nid, sc, cnt in scored[:top_k]]
 
     def get_best_performers(self, top_k: int = 5) -> list[dict]:
         """Get nodes with highest average feedback."""
-        scored = [(nid, self.get_average(nid), self.get_feedback_count(nid))
-                  for nid in self._feedbacks]
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [{"node_id": nid, "avg_score": sc, "feedback_count": cnt}
-                for nid, sc, cnt in scored[:top_k]]
+        with self._lock:
+            scored = [(nid, self.get_average(nid), self.get_feedback_count(nid))
+                      for nid in self._feedbacks]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return [{"node_id": nid, "avg_score": sc, "feedback_count": cnt}
+                    for nid, sc, cnt in scored[:top_k]]
 
     def get_feedback_trend(self, node_id: str, window: int = 10) -> list[float]:
         """Get feedback trend for a node."""
-        records = self._feedbacks.get(node_id, [])
-        return [r.value for r in records[-window:]]
+        with self._lock:
+            records = self._feedbacks.get(node_id, [])
+            return [r.value for r in records[-window:]]
 
     def get_type_stats(self) -> dict[str, int]:
         """Get feedback type distribution."""
-        return dict(self._type_counts)
+        with self._lock:
+            return dict(self._type_counts)
 
     def get_stats(self) -> dict:
-        total = sum(len(v) for v in self._feedbacks.values())
-        return {
-            "nodes_tracked": len(self._feedbacks),
-            "total_feedbacks": total,
-            "unique_types": len(self._type_counts),
-        }
+        with self._lock:
+            total = sum(len(v) for v in self._feedbacks.values())
+            return {
+                "nodes_tracked": len(self._feedbacks),
+                "total_feedbacks": total,
+                "unique_types": len(self._type_counts),
+            }
 
 
 class FailureLogTracker:
@@ -188,6 +202,13 @@ class FailureLogTracker:
         self._action_counts: Counter = Counter()
         self._error_patterns: Counter = Counter()
         self._severity_counts: Counter = Counter()
+        # RLock guards the shared mutable counters/list below. This tracker is a
+        # process-wide singleton (omega.failure_log) written concurrently by the
+        # main loop AND by the uvicorn API thread pool (POST /api/v1/remember ->
+        # omega.remember -> failure_log.log). Without it, the non-atomic
+        # Counter += and list append/truncate race (lost updates, inconsistent
+        # get_action_failure_rates cross-reference).
+        self._lock = threading.RLock()
 
     def log(self, action: str, error: str, context: dict | None = None,
             severity: str = "medium") -> None:
@@ -204,53 +225,60 @@ class FailureLogTracker:
             timestamp=time.time(), context=context or {},
             severity=severity,
         )
-        self._failures.append(record)
+        with self._lock:
+            self._failures.append(record)
 
-        # Truncate if too many
-        if len(self._failures) > self._max_size:
-            self._failures = self._failures[-self._max_size // 2:]
+            # Truncate if too many
+            if len(self._failures) > self._max_size:
+                self._failures = self._failures[-self._max_size // 2:]
 
-        # Update counters
-        self._action_counts[action] += 1
-        pattern = error[:50]
-        self._error_patterns[pattern] += 1
-        self._severity_counts[severity] += 1
+            # Update counters
+            self._action_counts[action] += 1
+            pattern = error[:50]
+            self._error_patterns[pattern] += 1
+            self._severity_counts[severity] += 1
 
     def get_avoidance_list(self, top_k: int = 10) -> list[str]:
         """Get actions to avoid (most frequent failures)."""
-        return [a for a, _ in self._action_counts.most_common(top_k)]
+        with self._lock:
+            return [a for a, _ in self._action_counts.most_common(top_k)]
 
     def get_common_errors(self, top_k: int = 5) -> list[dict]:
         """Get most common error patterns."""
-        return [{"pattern": p, "count": c} for p, c in self._error_patterns.most_common(top_k)]
+        with self._lock:
+            return [{"pattern": p, "count": c} for p, c in self._error_patterns.most_common(top_k)]
 
     def get_action_failure_rates(self) -> dict[str, dict]:
         """Get failure statistics per action."""
-        result = {}
-        for action, count in self._action_counts.items():
-            action_failures = [f for f in self._failures if f.action == action]
-            severities = Counter(f.severity for f in action_failures)
-            result[action] = {
-                "count": count,
-                "severities": dict(severities),
-                "latest_error": action_failures[-1].error if action_failures else "",
-            }
-        return result
+        with self._lock:
+            result = {}
+            for action, count in self._action_counts.items():
+                action_failures = [f for f in self._failures if f.action == action]
+                severities = Counter(f.severity for f in action_failures)
+                result[action] = {
+                    "count": count,
+                    "severities": dict(severities),
+                    "latest_error": action_failures[-1].error if action_failures else "",
+                }
+            return result
 
     def get_severity_distribution(self) -> dict[str, int]:
         """Get failure severity distribution."""
-        return dict(self._severity_counts)
+        with self._lock:
+            return dict(self._severity_counts)
 
     def get_recent_failures(self, n: int = 10) -> list[dict]:
         """Get recent failures."""
-        return [{"action": f.action, "error": f.error, "severity": f.severity,
-                 "ts": f.timestamp}
-                for f in self._failures[-n:]]
+        with self._lock:
+            return [{"action": f.action, "error": f.error, "severity": f.severity,
+                     "ts": f.timestamp}
+                    for f in self._failures[-n:]]
 
     def get_stats(self) -> dict:
-        return {
-            "total_failures": len(self._failures),
-            "unique_actions": len(self._action_counts),
-            "unique_errors": len(self._error_patterns),
-            "severity_distribution": dict(self._severity_counts),
-        }
+        with self._lock:
+            return {
+                "total_failures": len(self._failures),
+                "unique_actions": len(self._action_counts),
+                "unique_errors": len(self._error_patterns),
+                "severity_distribution": dict(self._severity_counts),
+            }
