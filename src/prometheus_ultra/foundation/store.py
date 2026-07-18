@@ -638,7 +638,8 @@ class MinervaStore:
                         (branch, limit),
                     ).fetchall()
                     return [self._row_to_node(r) for r in rows]
-                except sqlite3.Error:
+                except sqlite3.Error as e:
+                    logger.error("search (empty query) failed: %s", e)
                     return []
 
         with self._lock:
@@ -695,7 +696,8 @@ class MinervaStore:
                 return self._conn.execute(
                     "SELECT COUNT(*) FROM nodes WHERE tx_to=0.0"
                 ).fetchone()[0]
-            except sqlite3.Error:
+            except sqlite3.Error as e:
+                logger.error("get_node_count failed: %s", e)
                 return 0
 
     def get_edge_count(self) -> int:
@@ -712,7 +714,8 @@ class MinervaStore:
         with self._lock:
             try:
                 return self._conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-            except sqlite3.Error:
+            except sqlite3.Error as e:
+                logger.error("get_edge_count failed: %s", e)
                 return 0
 
     # ============================================================
@@ -964,7 +967,8 @@ class MinervaStore:
             try:
                 rows = self._conn.execute("SELECT name FROM branches").fetchall()
                 return [r["name"] for r in rows]
-            except sqlite3.Error:
+            except sqlite3.Error as e:
+                logger.error("list_branches failed: %s", e)
                 return []
 
     # ============================================================
