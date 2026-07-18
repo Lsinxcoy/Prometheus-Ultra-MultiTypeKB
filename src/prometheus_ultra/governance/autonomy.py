@@ -213,7 +213,17 @@ class EvolutionGrill:
         failed = len(checks) - passed
         
         sufficient = len(checks) >= self._min_checks and passed >= self._min_checks
-        approved = sufficient and failed == 0 or len(checks) == 0
+        # Fail-CLOSED: a high-risk-change gate may only approve when enough
+        # checks ran AND every one passed. An empty/missing checks list (or any
+        # failed check) must NOT auto-approve -- that is a fail-open that hides
+        # unreviewed changes behind an `approved=True` signal.
+        approved = sufficient and failed == 0
+        if not approved:
+            logger.warning(
+                "EvolutionGrill: change NOT approved (fail-closed) "
+                "checks=%d passed=%d failed=%d min=%d",
+                len(checks), passed, failed, self._min_checks,
+            )
         
         report = {
             "approved": approved,
