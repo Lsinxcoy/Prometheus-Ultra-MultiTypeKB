@@ -428,8 +428,10 @@ class KnowledgeRuminationEngine:
                             type("Skill", (), {"name": skill_name, "topic": q, "origin": "rumination"})()
                         )
                         result.skills_promoted += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(
+                            "[Rumination] 技能晋升注册失败 skill=%s: %s", skill_name, e
+                        )
         except Exception as e:
             logger.debug("[Rumination] 模式晋升失败: %s", e)
 
