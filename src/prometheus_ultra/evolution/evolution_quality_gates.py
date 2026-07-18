@@ -289,10 +289,21 @@ class EvolutionQualityGates:
             "timestamp": report.timestamp,
         }
 
-    # 兼容别名: life.py 调用 check_step()
+    # 兼容别名: life.py 调用 check_step() 做 step-budget 门禁
     def check_step(self, step: str = "", step_number: int = 0, max_steps: int = 0) -> tuple:
-        """检查步骤是否允许继续 (兼容别名)."""
-        # 默认允许继续
+        """检查步骤是否允许继续 (step-budget 门禁).
+
+        基于步骤预算 (max_steps) 做门禁: 当 step_number 达到/超过 max_steps 时阻断,
+        防止进化循环步数失控。max_steps<=0 视为不限制 (向后兼容旧调用方)。
+        life.py 在 evolve 流水线以此返回值作为真实阻断判断 (if not allowed: BLOCKED)。
+        """
+        if max_steps > 0 and step_number >= max_steps:
+            reason = (
+                f"step budget exhausted: step {step_number} >= max {max_steps} "
+                f"(step='{step}')"
+            )
+            logger.warning("EvolutionQualityGates blocked step: %s", reason)
+            return False, reason
         return True, "step allowed"
 
     def record_step(self, step_id: str, action: str, information_gain: float = 0.0, **kwargs) -> dict:
