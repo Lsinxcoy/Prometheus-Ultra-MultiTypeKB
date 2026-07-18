@@ -1,0 +1,43 @@
+[OK] health: {'status': 'healthy', 'service': 'prometheus-ultra', 'engine_health': 'healthy', 'detail': 'engine o
+[OK] recall: 7
+[OK] learn(arxiv+T4): compiled
+[OK] evolve: ok
+[OK] maintain: ok
+[FAIL] t4_compile: compiled
+[OK] metrics: 采集完成
+✅ **Ultra 系统监控报告** — 2026-07-19 07:12:40
+
+**健康检查**: ⚠️ 异常
+
+**七管道实跑结果**:
+| 管道 | 状态 | 耗时 | 说明 |
+|------|------|------|------|
+| 健康探针 | ✅ OK | 0.01s | 通过 |
+| 记忆检索 recall | ✅ OK | 2.79s | hits=7 |
+| 知识吸收 learn (arXiv+T4) | ✅ OK | 1.39s | compiled=False |
+| 自进化 evolve | ✅ OK | 0.79s | 通过 |
+| 记忆维护 maintain | ✅ OK | 0.13s | consolidated=16 |
+| T4 机制编译 | ❌ FAIL | 13.05s | compiled |
+| 指标采集 | ✅ OK | 15.06s | 通过 |
+
+**记忆知识库**:
+- 节点总数: None　全局效用: None
+
+**机制引擎**:
+- 总数: None　启用: None　禁用: None　注册: None
+
+**自进化引擎**:
+
+**学习到的论文 (store PAPER 节点, 共 0 篇)**:
+  - 暂无 (learn 抓 arxiv 后此处动态增长)
+
+**宿主集成**: ✅ None（适配器 None）
+
+**🔍 分级深度检测（共 3 项: 0 critical / 3 warning / 0 info）**:
+🟡 [数据流探针异常] remember 写入失败: HTTPError: HTTP Error 502: Bad Gateway
+🟡 [数据流-learn产出空] learn(arxiv) 返回 new_nodes=0 (可能未落库或源无新内容)
+     建议: 建议: 检查 learn 是否真写 store
+🟡 [数据流-rumination] dashboard 无 rumination 状态
+
+**总结**: 🟡 Ultra 有 3 项 warning (触发缺失/过程层失效/漂移), 待观察或修复
+[feishu] sent ok msg_id=om_x100b6af4c93a64a0c1194ab1616180d

@@ -644,19 +644,37 @@ class MinervaStore:
                     return []
 
         with self._lock:
-            # Try FTS5 first
+            # Try FTS5 first — 转义特殊字符避免语法错误导致降级
+            # FTS5 特殊字符: " * ( ) : ^ . + - / AND OR NOT
+            # 用双引号包裹整句做 phrase query (最稳), 失败再尝试裸查询, 再 fallback LIKE
+            fts_query = query
+            special = set('*():"^.+-/')
+            if any(c in special for c in query) and not (query.startswith('"') and query.endswith('"')):
+                fts_query = '"' + query.replace('"', '""') + '"'
             try:
                 rows = self._conn.execute(
                     """SELECT n.* FROM nodes_fts f
                        JOIN nodes n ON f.id = n.id
                        WHERE nodes_fts MATCH ? AND n.branch=? AND n.tx_to=0.0
                        ORDER BY rank LIMIT ?""",
-                    (query, branch, limit),
+                    (fts_query, branch, limit),
                 ).fetchall()
                 return [self._row_to_node(r) for r in rows]
             except (sqlite3.OperationalError, sqlite3.OperationalError) as e:
-                logger.warning("FTS search failed, falling back to LIKE: %s", e)
-                self._fts_fallback_count += 1
+                logger.debug("FTS search (phrase) failed, trying raw: %s", e)
+                # 再试一次裸查询(可能本身就是合法 FTS 语法)
+                try:
+                    rows = self._conn.execute(
+                        """SELECT n.* FROM nodes_fts f
+                           JOIN nodes n ON f.id = n.id
+                           WHERE nodes_fts MATCH ? AND n.branch=? AND n.tx_to=0.0
+                           ORDER BY rank LIMIT ?""",
+                        (query, branch, limit),
+                    ).fetchall()
+                    return [self._row_to_node(r) for r in rows]
+                except (sqlite3.OperationalError, sqlite3.OperationalError) as e2:
+                    logger.warning("FTS search failed, falling back to LIKE: %s", e2)
+                    self._fts_fallback_count += 1
 
             # Fallback to LIKE search
             try:

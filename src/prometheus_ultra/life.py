@@ -4450,16 +4450,23 @@ class Omega:
 
             # 孤岛机制检测: 注册/定义但从未被消费的载体项 (沉默机制)
             # 这些是"看似存在、实则从不触发"的虚假繁荣来源
-            # 根因分类: 测试残留 / 触发路径缺失(真bug) / 合理休眠
+            # 根因分类: 测试残留 / 孤儿注册(源机制残留) / 合理休眠 / 触发路径缺失(真bug)
             silent = []
-            silent_by_category = {"test_residue": [], "trigger_missing": [], "dormant_ok": []}
+            silent_by_category = {"test_residue": [], "orphan_registry": [], "dormant_ok": [], "trigger_missing": []}
             def _classify_silent(label, name):
                 silent.append(f"{label}:{name}")
                 low = name.lower()
+                # 测试残留
                 if "test" in low or "tmp" in low or low.endswith("_p") or low.startswith("p_") or low.startswith("c1_") or low.startswith("c2_"):
                     silent_by_category["test_residue"].append(f"{label}:{name}")
-                elif label in ("registry", "skill", "gene") and not any(k in low for k in ("explore", "pending", "speculative", "candidate")):
-                    # 非探索性/非待定机制却从未消费 = 触发路径可能缺失(真bug线索)
+                # 孤儿注册: learn_*/scan_* 等源机制残留 (learn管道直连scanner, 不查注册表)
+                elif label == "registry" and (low.startswith("learn_") or low.startswith("scan_") or low.startswith("fetch_")):
+                    silent_by_category["orphan_registry"].append(f"{label}:{name}")
+                # 合理休眠: 探索性基因/候选/待定产物 (设计上不一定被消费)
+                elif label in ("registry", "skill", "gene") and any(k in low for k in ("explore", "pending", "speculative", "candidate", "semantic_evo", "evo_g")):
+                    silent_by_category["dormant_ok"].append(f"{label}:{name}")
+                # 触发路径缺失(真bug线索): 非测试/非孤儿/非探索性却从未消费
+                elif label in ("registry", "skill", "gene", "instinct", "harness"):
                     silent_by_category["trigger_missing"].append(f"{label}:{name}")
                 else:
                     silent_by_category["dormant_ok"].append(f"{label}:{name}")

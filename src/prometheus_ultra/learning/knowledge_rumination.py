@@ -433,13 +433,13 @@ class KnowledgeRuminationEngine:
                             "[Rumination] 技能晋升注册失败 skill=%s: %s", skill_name, e
                         )
         except Exception as e:
-            logger.debug("[Rumination] 模式晋升失败: %s", e)
+            logger.warning("[Rumination] 模式晋升失败: %s", e)
 
     # ------------------------------------------------------------------
     # 调度状态持久化 (跨重启保留反刍周期)
     # ------------------------------------------------------------------
     def _persist(self) -> None:
-        """原子写调度状态到 state_path (JSON). 失败静默(不阻塞反刍)."""
+        """原子写调度状态到 state_path (JSON). 失败告警(不阻塞反刍, 但生产须可见)."""
         state_path = getattr(self, "state_path", None)
         if not state_path:
             return
@@ -456,7 +456,7 @@ class KnowledgeRuminationEngine:
                 }, f, ensure_ascii=False, indent=2)
             os.replace(tmp, state_path)
         except Exception as e:
-            logger.debug("[Rumination] persist failed: %s", e)
+            logger.warning("[Rumination] persist failed: %s", e)
 
     def _load(self) -> None:
         """从 state_path 加载调度状态. 损坏/缺失则保持默认(0.0)."""
@@ -475,7 +475,7 @@ class KnowledgeRuminationEngine:
         except FileNotFoundError:
             pass  # 首次运行, 保持默认
         except Exception as e:
-            logger.debug("[Rumination] load failed (using defaults): %s", e)
+            logger.warning("[Rumination] load failed (using defaults): %s", e)
 
     # ------------------------------------------------------------------
     # 状态查询
