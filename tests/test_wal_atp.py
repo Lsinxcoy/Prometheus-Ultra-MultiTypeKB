@@ -108,6 +108,80 @@ class TestMerkleChain:
         assert chain1 == chain2
 
 
+class TestMerkleChainCorruptionResilience:
+    """verify_chain must survive a corrupted entry — the exact scenario a WAL
+    exists for (crash recovery with a half-written/truncated log).
+
+    Regression guard for the bug where verify_chain (1) crashed with an
+    unhandled exception on a malformed entry instead of reporting a broken
+    link, and (2) left ``self._chain_tip_hash`` mutated, corrupting the live
+    Merkle tip for all subsequent log_operation appends.
+    """
+
+    def test_corrupted_entry_reported_not_crashed(self, wal):
+        """A missing op_type (corrupted record) is reported, not raised."""
+        make_valid_entry(wal, "remember", "k1", "v1")
+        make_valid_entry(wal, "remember", "k2", "v2")
+
+        for e in wal._chain_entries:
+            if e["lsn"] == 2:
+                e.pop("op_type", None)
+                break
+
+        # Must not raise — corruption must surface in the result.
+        chain = wal.verify_chain()
+        assert chain["valid"] is False
+        assert chain["broken_links"] >= 1
+        assert chain["entries_checked"] == 2
+        assert chain["first_broken_lsn"] == 2
+
+    def test_none_op_type_reported_not_crashed(self, wal):
+        """A None op_type (corrupted record) is reported, not raised."""
+        make_valid_entry(wal, "remember", "k1", "v1")
+        make_valid_entry(wal, "remember", "k2", "v2")
+
+        for e in wal._chain_entries:
+            if e["lsn"] == 1:
+                e["op_type"] = None
+                break
+
+        chain = wal.verify_chain()
+        assert chain["valid"] is False
+        assert chain["broken_links"] >= 1
+
+    def test_verify_preserves_live_chain_tip(self, wal):
+        """Verifying a corrupted chain must NOT corrupt live chain state."""
+        make_valid_entry(wal, "remember", "k1", "v1")
+        make_valid_entry(wal, "remember", "k2", "v2")
+        tip_before = wal._chain_tip_hash
+        assert tip_before  # non-empty after writes
+
+        # Corrupt the first entry so the walk hits a malformed record.
+        wal._chain_entries[0].pop("op_type", None)
+
+        # Verify must not raise, and live tip must be untouched afterwards.
+        wal.verify_chain()
+        assert wal._chain_tip_hash == tip_before
+
+    def test_verify_resilient_then_append_links_off_original_tip(self, wal):
+        """After a corrupted verify, the next append still chains off the
+        ORIGINAL live tip (no contamination from the aborted walk)."""
+        make_valid_entry(wal, "remember", "k1", "v1")
+        tip_before = wal._chain_tip_hash
+
+        # Corrupt entry 1.
+        wal._chain_entries[0].pop("op_type", None)
+        chain = wal.verify_chain()
+        assert chain["valid"] is False
+        assert wal._chain_tip_hash == tip_before
+
+        # A subsequent valid append must chain off the preserved tip, not the
+        # corrupted walk tip.
+        r = make_valid_entry(wal, "remember", "k2", "v2")
+        assert r["valid"] is True
+        assert r["hash"] == wal._compute_entry_hash(wal._chain_entries[-1], tip_before)
+
+
 # ============================================================
 # Test 2: Atomic Transaction — begin_tx → 2 writes → commit_tx
 # ============================================================

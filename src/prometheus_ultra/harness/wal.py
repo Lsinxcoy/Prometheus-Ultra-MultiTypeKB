@@ -189,13 +189,21 @@ class WriteAheadLog:
 
         return {"lsn": self._lsn, "valid": True, "reason": "ok", "hash": entry_hash}
 
-    def _compute_entry_hash(self, entry: dict) -> str:
+    def _compute_entry_hash(self, entry: dict, tip: str | None = None) -> str:
         """Compute SHA-256 hash for an entry, chaining to chain_tip_hash.
 
         Hash input = prev_hash + lsn + op_type + key + str(value) + str(metadata) + str(timestamp)
+
+        Args:
+            entry: the entry dict to hash.
+            tip: optional explicit previous-chain hash. When None, the live
+                 ``self._chain_tip_hash`` is used (normal append path). Passing
+                 an explicit tip lets callers (e.g. verify_chain) walk the chain
+                 without mutating live state.
         """
         hasher = hashlib.sha256()
-        hasher.update(self._chain_tip_hash.encode("utf-8"))
+        base = self._chain_tip_hash if tip is None else tip
+        hasher.update(base.encode("utf-8"))
         hasher.update(str(entry["lsn"]).encode("utf-8"))
         hasher.update(entry["op_type"].encode("utf-8"))
         hasher.update(entry["key"].encode("utf-8"))
@@ -239,22 +247,47 @@ class WriteAheadLog:
         re-computes each hash using the previous entry's hash,
         and reports any broken links.
 
+        Resilience contract (safety-critical):
+          * Never mutates live chain state (``self._chain_tip_hash``). A
+            verification walk must not corrupt the tip used by subsequent
+            ``log_operation`` appends — the original implementation mutated the
+            live tip and only restored it at the very end, so a single
+            corrupted/malformed entry (the exact scenario a WAL exists for:
+            crash recovery with a half-written log) would both crash the
+            verification AND leave the live Merkle tip corrupted.
+          * A malformed entry is reported as a broken link, never raised. The
+            walk must surface corruption, not abort on it.
+
         Returns:
             {"valid": bool, "entries_checked": int, "broken_links": int,
              "first_broken_lsn": int or None}
         """
-        saved_tip = self._chain_tip_hash
-        # Reset for verification walk
-        self._chain_tip_hash = ""
-
+        # Local running tip — start from empty and recompute the chain from
+        # scratch (Merkle root semantics). Live state is never touched.
+        chain_tip = ""
         broken_links = 0
         first_broken_lsn = None
         entries_checked = 0
 
         for entry in self._chain_entries:
             entries_checked += 1
+            # A corrupted entry (missing/None op_type, etc.) must be reported,
+            # not raised — otherwise verification cannot fulfil its contract.
+            try:
+                computed = self._compute_entry_hash(entry, chain_tip)
+            except Exception as exc:
+                broken_links += 1
+                lsn = entry.get("lsn")
+                if first_broken_lsn is None:
+                    first_broken_lsn = lsn
+                logger.warning("Merkle chain entry malformed at LSN %s: %s",
+                               lsn, exc)
+                # Advance using the stored hash (best effort) so remaining
+                # entries can still be evaluated against the recorded chain.
+                chain_tip = entry.get("hash", "")
+                continue
+
             stored_hash = entry.get("hash", "")
-            computed = self._compute_entry_hash(entry)
             if computed != stored_hash:
                 broken_links += 1
                 if first_broken_lsn is None:
@@ -262,10 +295,7 @@ class WriteAheadLog:
                 logger.warning("Merkle chain broken at LSN %d: stored=%s computed=%s",
                                entry.get("lsn"), stored_hash[:16], computed[:16])
             # Advance the chain regardless (using original hashes)
-            self._chain_tip_hash = stored_hash if computed == stored_hash else computed
-
-        # Restore original state
-        self._chain_tip_hash = saved_tip
+            chain_tip = stored_hash if computed == stored_hash else computed
 
         return {
             "valid": broken_links == 0,
