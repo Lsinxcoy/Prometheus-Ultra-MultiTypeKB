@@ -896,6 +896,16 @@ class UltraAPIServer:
                 except Exception:
                     summary["pipeline_health"] = {}
 
+                # ── 语义相关性 (Tier 3: 是否在学垃圾) + 依赖深度 (传递性孤岛) ──
+                try:
+                    summary["semantic_health"] = o.get_semantic_health()
+                except Exception:
+                    summary["semantic_health"] = {}
+                try:
+                    summary["dependency_depth"] = o.get_dependency_depth()
+                except Exception:
+                    summary["dependency_depth"] = {}
+
                 # ── 宿主接入层 (V3 G3 多 Agent 隔离) ──
                 host_id = "none"
                 try:

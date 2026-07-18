@@ -80,7 +80,7 @@ class MechanismRegistry:
         # _history / _superposed 不持久(运行期临时态)
 
     def _persist(self) -> None:
-        """序列化 _mechanisms / _enabled 到 JSON. 失败静默(不阻断主流程)."""
+        """序列化 _mechanisms / _enabled 到 JSON. 失败记 WARNING 暴露(不阻断主流程)."""
         if not self._path:
             return
         import json
@@ -97,7 +97,7 @@ class MechanismRegistry:
                 json.dump(blob, f, ensure_ascii=False, indent=1)
             os.replace(tmp, self._path)  # 原子替换, 避免半写
         except Exception as e:
-            logger.debug("MechanismRegistry._persist failed: %s", e)
+            logger.warning("MechanismRegistry._persist failed (registry durability lost): %s", e)
     
     def register(self, name: str, data: dict | None = None,
                  dependencies: list[str] | None = None,

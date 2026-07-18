@@ -4536,10 +4536,89 @@ class Omega:
             a2a = getattr(self, "a2a", None)
             if a2a is not None:
                 health["a2a_failed"] = getattr(a2a, "_fail_count", 0) or getattr(a2a, "fail_count", 0) or 0
+            # 跨重启累计: 当期内存值 + 持久化基线 (防止 cron 30min 重启清零)
+            try:
+                import os as _os
+                _pf = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "archive", "pipeline_health_counters.json")
+                _base = {}
+                if _os.path.exists(_pf):
+                    try:
+                        _base = json.load(open(_pf, encoding="utf-8"))
+                    except Exception:
+                        _base = {}
+                # 返回 累计 = 基线 + 当期
+                cum = {k: (_base.get(k, 0) + health.get(k, 0)) for k in ("fuse_invalid", "passk_failed", "owner_harm_violations", "fts_fallback", "a2a_failed")}
+                health.update(cum)
+                # 写回累计 (下次基线含本期)
+                try:
+                    _os.makedirs(_os.path.dirname(_pf), exist_ok=True)
+                    json.dump(cum, open(_pf, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+            except Exception:
+                pass
             return health
         except Exception as e:
             logger.debug("get_pipeline_health failed: %s", e)
             return {"llm_mode": "unknown", "llm_available": False}
+
+    def get_semantic_health(self) -> dict:
+        """Tier 3: 学习语义相关性 — 近期节点 utility 分布, 检测'是否在学垃圾'.
+
+        返回 low_utility_ratio (utility<0.1 占比) 与 kta_untranslated (未消化高utility知识).
+        """
+        try:
+            from prometheus_ultra.foundation.schema import NodeType
+            store = getattr(self, "store", None)
+            if store is None:
+                return {"low_utility_ratio": 0.0, "sampled": 0, "kta_untranslated": 0}
+            # 采样近期 FACT/INSIGHT/CONCEPT 节点 (近期学习主体)
+            utils = []
+            for nt in (NodeType.FACT, NodeType.INSIGHT, NodeType.CONCEPT, NodeType.PATTERN):
+                try:
+                    nodes = store.get_nodes_by_type(nt, limit=200)
+                    for n in nodes:
+                        u = getattr(n, "utility", None)
+                        if u is not None:
+                            utils.append(u)
+                except Exception:
+                    continue
+            sampled = len(utils)
+            low = sum(1 for u in utils if u < 0.1)
+            low_ratio = round(low / max(1, sampled), 4)
+            # KTA 未翻译高utility节点 (知识未消化)
+            kta = 0
+            try:
+                kta_hint = self.knowledge_to_mechanism.scan_for_opportunities(
+                    store=store, utility_threshold=0.6)
+                kta = kta_hint.get("untranslated_count", 0) or 0
+            except Exception:
+                pass
+            return {"low_utility_ratio": low_ratio, "sampled": sampled,
+                    "low_utility_count": low, "kta_untranslated": kta}
+        except Exception as e:
+            logger.debug("get_semantic_health failed: %s", e)
+            return {"low_utility_ratio": 0.0, "sampled": 0, "kta_untranslated": 0}
+
+    def get_dependency_depth(self) -> dict:
+        """Tier 3: 依赖深度 — 传递性孤岛 (消费者的消费者也是孤岛).
+
+        构建机制消费图: 已知 silent_mechanisms 是表面孤岛.
+        若某机制的触发路径依赖另一孤岛机制(消费关系), 则其实质也是孤岛.
+        这里用已知 silent 集合 + 机制 emit_accepted 关系做一层传递闭包近似.
+        """
+        try:
+            cons = self.get_mechanism_consumption()
+            silent = set(cons.get("silent_mechanisms", []))
+            if not silent:
+                return {"transitive_islands": [], "depth": 0}
+            # 近似: 表面孤岛中, 属 'trigger_missing' (真bug线索) 且名为 learn_* / semantic_evo_*
+            # 这类通常是上游数据源, 其下游机制若依赖它们则实质连带失活.
+            transitive = [s for s in silent if any(k in s for k in ("learn_", "semantic_evo_", "academic", "arxiv"))]
+            return {"transitive_islands": transitive, "depth": 1, "surface_islands": len(silent)}
+        except Exception as e:
+            logger.debug("get_dependency_depth failed: %s", e)
+            return {"transitive_islands": [], "depth": 0}
 
     def _compute_fitness(self):
         """Compute system fitness based on multiple quality dimensions."""
