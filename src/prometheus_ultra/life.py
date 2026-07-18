@@ -700,11 +700,10 @@ class Omega:
         # S3: T1 进化状态持久化(跨会话累积)
         from prometheus_ultra.evolution.evolution_state import EvolutionState
         self.evolution_state = EvolutionState(store=self.store)
-        try:
-            if self.evolution_state.load(self.evolution_engine):
-                logger.info("Evolve: restored evolution state from previous session")
-        except Exception as e:
-            logger.debug("Evolve: state load failed: %s", e)
+        # load() 永不抛出(内部已捕获); 损坏记 WARNING 并回退 .bak,
+        # 首跑(无状态文件) benign 返回 False。无需 try/except 包裹。
+        if self.evolution_state.load(self.evolution_engine):
+            logger.info("Evolve: restored evolution state from previous session")
         self.rule_expiration = RuleExpirationAudit()
 
         # Scaling & cognitive safety
@@ -2552,11 +2551,10 @@ class Omega:
             logger.debug("Evolve: T2 semantic evolution failed: %s", e)
 
         # ===== S3: T1 进化状态持久化(跨会话累积) =====
-        try:
-            self.evolution_state.save(self.evolution_engine)
+        # save() 永不抛出(内部已捕获), 失败时记 WARNING 并返回 False;
+        # 据此正确反映 chain_trace, 不再把失败静默当成功。
+        if self.evolution_state.save(self.evolution_engine):
             chain_trace["state_save"] = True
-        except Exception as e:
-            logger.debug("Evolve: state save failed: %s", e)
 
         # Verification Gate — ensure evolution is actually beneficial (Superpowers)
         delta = fitness_after - fitness_before
