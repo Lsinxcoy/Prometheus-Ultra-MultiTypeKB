@@ -26,3 +26,4 @@ venv/
 # 运行时产物(编译/日志)
 archive/compiled/
 wal_logs/
+ultra_9200.log

@@ -322,6 +322,10 @@ class Omega:
     Supports branch-based parallel experimentation.
     """
 
+    # 健康聚合阈值: 失败组件数达到此值, 引擎健康升级为 critical。
+    # (组件失败但 equilibrium 仍绿时, 原先被 _compute_health 完全忽略 —— 监控盲区)
+    HEALTH_CRITICAL_COMPONENT_FAILURES = 3
+
     def __init__(self, config: ZConfig | None = None, db_path: str | None = None,
                  host: Any | None = None) -> None:
         self._cfg = config if config is not None else ZConfig()
@@ -4311,44 +4315,58 @@ class Omega:
     # ============================================================
     def status(self) -> SystemStatus:
         """获取系统状态（带 None 安全检查）。"""
-        details = {}
-        
-        # 安全获取各组件状态，避免 None 错误
-        components = [
-            ("bank", "bank.count"),
-            ("convergence", "convergence.is_converged"),
-            ("dopamine", "dopamine.get_stats"),
-            ("five_gates", "five_gates.get_stats"),
-            ("constitution", "constitution.get_stats"),
-            ("graph_memory", "graph_memory.get_stats"),
-            ("four_network", "four_network.get_stats"),
-            ("utility_tracker", "utility_tracker.get_stats"),
-            ("curiosity_queue", "curiosity_queue.get_stats"),
-            ("knowledge_scanner", "knowledge_scanner.get_stats"),
-            ("mars", "mars.get_stats"),
-            ("evolution_engine", "evolution_engine.get_stats"),
-        ]
-        
-        for name, method in components:
-            try:
-                comp = getattr(self, name, None)
-                if comp is not None and hasattr(comp, method.split('.')[-1]):
-                    details[name] = getattr(comp, method.split('.')[-1])()
-                else:
-                    details[name] = {"error": f"{name} not initialized or missing method"}
-            except Exception as e:
-                details[name] = {"error": str(e)[:50]}
-        
+        details, failed = self._collect_component_health()
         return SystemStatus(
             node_count=self.store.get_node_count(),
             edge_count=self.store.get_edge_count(),
             active_sessions=1,
             uptime_seconds=time.time() - self._start_time,
-            health=self._compute_health(),
+            health=self._compute_health(failed_components=failed),
             version="1.0.0",
             mechanisms=127,
             details=details,
         )
+
+    # 组件健康探针表: (属性名, 方法路径)。status() 与 _compute_health() 共用,
+    # 避免重复采集逻辑。任一组件缺失/抛错都被记入 failed, 供健康聚合判定降级。
+    COMPONENT_HEALTH_PROBES = [
+        ("bank", "bank.count"),
+        ("convergence", "convergence.is_converged"),
+        ("dopamine", "dopamine.get_stats"),
+        ("five_gates", "five_gates.get_stats"),
+        ("constitution", "constitution.get_stats"),
+        ("graph_memory", "graph_memory.get_stats"),
+        ("four_network", "four_network.get_stats"),
+        ("utility_tracker", "utility_tracker.get_stats"),
+        ("curiosity_queue", "curiosity_queue.get_stats"),
+        ("knowledge_scanner", "knowledge_scanner.get_stats"),
+        ("mars", "mars.get_stats"),
+        ("evolution_engine", "evolution_engine.get_stats"),
+    ]
+
+    def _collect_component_health(self) -> tuple[dict, list[str]]:
+        """安全采集各组件健康。
+
+        Returns:
+            (details, failed):
+            - details[name] = 组件统计, 或 {'error': ...}(缺失/抛错)
+            - failed = 探测失败的组件名列表(供 _compute_health 聚合)
+        """
+        details: dict = {}
+        failed: list[str] = []
+        for name, method in self.COMPONENT_HEALTH_PROBES:
+            attr = method.split('.')[-1]
+            try:
+                comp = getattr(self, name, None)
+                if comp is None or not hasattr(comp, attr):
+                    details[name] = {"error": f"{name} not initialized or missing method"}
+                    failed.append(name)
+                    continue
+                details[name] = getattr(comp, attr)()
+            except Exception as e:
+                details[name] = {"error": str(e)[:50]}
+                failed.append(name)
+        return details, failed
 
     def get_mechanism_consumption(self) -> dict:
         """方案Y: 聚合全 6 类机制载体的消费/激活状态。
@@ -4521,7 +4539,7 @@ class Omega:
         }
         return min(1.0, max(0.0, total))
 
-    def _compute_health(self) -> str:
+    def _compute_health(self, failed_components: list[str] | None = None) -> str:
         try:
             if self.store.get_node_count() == 0:
                 return "empty"
@@ -4529,6 +4547,15 @@ class Omega:
             if eq == AlertLevel.RED:
                 return "critical"
             if eq == AlertLevel.ORANGE:
+                return "degraded"
+            # 聚合组件健康: 原先仅看 equilibrium, 组件失败被完全忽略(监控盲区)。
+            # 现把 status() 已采集的失败组件计入: 1+ 失败 -> degraded;
+            # 达到阈值 -> critical。equilibrium 仍是最优先信号。
+            if failed_components is None:
+                _, failed_components = self._collect_component_health()
+            if len(failed_components) >= self.HEALTH_CRITICAL_COMPONENT_FAILURES:
+                return "critical"
+            if failed_components:
                 return "degraded"
             return "healthy"
         except Exception:
