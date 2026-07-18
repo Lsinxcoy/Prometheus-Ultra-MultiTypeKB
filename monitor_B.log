@@ -1,0 +1,102 @@
+[OK] health: {'status': 'healthy', 'service': 'prometheus-ultra', 'engine_health': 'healthy', 'detail': 'engine o
+[OK] recall: 5
+[OK] learn(arxiv+T4): compiled
+[OK] evolve: ok
+[OK] maintain: ok
+[OK] t4_compile: compiled
+[OK] metrics: 采集完成
+✅ **Ultra 系统监控报告** — 2026-07-19 02:34:17
+
+**健康检查**: ⚠️ 异常
+**状态**: 节点:1104 | 机制:25 | 启用:7 | 效用:0.7028 | 宿主:hermes
+
+**七管道实跑结果**:
+| 管道 | 状态 | 耗时 | 说明 |
+|------|------|------|------|
+| 健康探针 | ✅ OK | 0.01s | 通过 |
+| 记忆检索 recall | ✅ OK | 1.58s | hits=5 |
+| 知识吸收 learn (arXiv+T4) | ✅ OK | 1.46s | compiled=False |
+| 自进化 evolve | ✅ OK | 0.83s | 通过 |
+| 记忆维护 maintain | ✅ OK | 0.15s | consolidated=47 |
+| T4 机制编译 | ✅ OK | 22.2s | 通过 |
+| 指标采集 | ✅ OK | 24.93s | 通过 |
+
+**记忆知识库**:
+- 节点总数: 1104　全局效用: 0.7028
+- 类型分布: {'FACT': 335, 'CONCEPT': 693, 'PROCEDURE': 61, 'PAPER': 13, 'PROJECT': 2}
+
+**机制引擎**:
+- 总数: 25　启用: 7　禁用: 13　注册: 6
+- 待剪枝候选: 0
+
+**自进化引擎**:
+- 代数: 10　种群: 50　收敛: True（max_generations）
+- 上次链路: SUCCESS　真实适应度 0.7688411523485061 → 0.8188411523485061（0.82s）
+- 进化基因维度: 1 项
+
+**适应度分解 (10维)**:
+- 总适应度: 0.8223　旧7维: memory=0.3 diversity=0.08 evolution=0.0 health=0.15 harness=0.1 utility=0.0703 energy=0.0194
+- 【新三维】多类型覆盖: 0.1　机制消费率: 0.0026　反刍产出率: 0.0
+
+**机制消费率 (全6类聚合)**:
+- 总机制: 3228　已消费: 85　消费率: 0.0263
+  - mechanism_registry: 3/25
+  - skill_registry: 0/1
+  - speculative_genes: 0/1
+  - handbook: 81/3193
+  - instincts: 1/1
+  - harness_x: 0/7
+
+**反刍机制 (温故知新)**:
+- 上次全量: 0h29m前　上次增量: 0h30m前
+- 历史次数: 7　下次模式: incremental
+- 距下次全量: 330m　距下次增量: 0m
+
+**学习到的论文 (store PAPER 节点, 共 13 篇)**:
+  - DOME: Recommendations for supervised machine learning valida (utility=0.98)
+  - Machine learning with sklearn: <p>This chapter’s goal is to  (utility=0.98)
+  - Particle production from bubble collisions: Collisions of ul (utility=0.82)
+  - Hierarchical Denoising For Multi-Step Visual Reasoning: Vide (utility=0.82)
+  - Partition, Prompt, Aggregate: Statistical Self-Consistency i (utility=0.82)
+  - Partition, Prompt, Aggregate: Statistical Self-Consistency i (utility=0.82)
+  - RoboTTT: Context Scaling for Robot Policies: Recent robot fo (utility=0.82)
+  - Changing Data Sources in the Age of Machine Learning for Off (utility=0.79)
+
+**宿主集成**: ✅ hermes（适配器 HermesAdapter）
+
+**论文知识库（共 6 篇）**:
+- 评级分布: {'PARTIAL': 3, 'MATCH': 3}
+  - [PARTIAL] Rethink Causal Mask Attention for VL（2505.18605，V2.4 P1-a）
+  - [PARTIAL] Modality-Mutual Attention (HeRA)（2606.23885，V2.4 P1-c）
+  - [MATCH] Learning to Focus (Grad Token Pruning)（2506.07851，V2.3 P0-a）
+  - [PARTIAL] Overlapped-Frame Fusion (Speech)（2501.12004，V2.4b P1-d）
+  - [MATCH] Mind the Gap (Thought Leap)（2505.14684，V2.3 P0-b）
+
+**🔍 分级深度检测（共 10 项: 2 critical / 3 warning / 5 info）**:
+🔴 [孤岛模块-核心管道事件无订阅者] 1 个核心事件发布但 0 订阅者
+     证据: remember
+     建议: 建议: 核心管道断链, 订阅者缺失=模块间失联
+🔴 [数据流断链-learn→store] learn 写入标记节点 MONITOR_PROBE_1784399686 但 search 查不到
+     证据: learn_ok_but_not_persisted
+     建议: 建议: learn 产出未落库, 检查 remember/store 写入路径
+🟡 [孤岛机制-触发路径缺失] 18 个非探索性机制注册但从未被消费(可能真bug)
+     证据: registry:semantic_evo_g1, registry:semantic_evo_g2, registry:z_mech, registry:learn_arxiv:2401.12345, registry:learn_web, registry:semantic_
+     建议: 建议: 检查是否有管道应调用但未调用
+🟡 [孤岛模块-事件无订阅者] 1 个事件类型发布但 0 订阅者
+     证据: system_recovered
+     建议: 建议: 检查事件是否被消费
+🟡 [安全边界突破] Owner-Harm 边界突破 16 次
+     证据: violations=16
+     建议: 建议: 检查跨边界调用
+🟢 [孤岛机制-测试残留] 4 个测试/临时机制从未消费
+     证据: registry:test_compiled_mech, registry:test_extracted_mech, registry:p_mech, registry:c1_mech
+     建议: 建议: 清理机制注册表测试残留
+🟢 [孤岛机制-合理休眠] 1 个探索性/待定机制尚未触发(观察)
+🟢 [LLM路径可用] llm_bridge.mode=anthropic available=True
+🟢 [FTS检索降级] 全文检索降级 6 次(转LIKE)
+     证据: fts_fallback=6
+     建议: 建议: 检查 FTS5 查询语法
+🟢 [数据流-rumination] rumination 引擎在线 (周期触发由心跳/learn 驱动)
+
+**总结**: 🔴 Ultra 有 2 项 critical 问题需立即处理 (核心管道断链/真bug)
+[feishu] sent ok msg_id=om_x100b6a883a4884a4c21afeea640e94c
