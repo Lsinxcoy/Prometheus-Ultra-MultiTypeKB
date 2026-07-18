@@ -14,6 +14,8 @@ from __future__ import annotations
 
 
 import logging
+import os
+import re
 
 import hashlib
 import json
@@ -49,6 +51,49 @@ class CrashStateRestore:
         self._dir = Path(checkpoint_dir)
         self._max = max_checkpoints
         self._checkpoints: list[StateCheckpoint] = []
+        # 重启后从磁盘恢复已存在的检查点: 使编号不碰撞、不覆盖旧会话
+        # 检查点, 并让 restore_latest 在崩溃后能真正回到最新完好状态。
+        self._load_existing()
+
+    def _next_checkpoint_id(self) -> int:
+        """基于磁盘上已有 checkpoint_<id>.json 的最大编号 +1。
+
+        不依赖内存列表长度, 因此进程重启后不会从 1 重新编号而覆盖
+        上一会话的检查点文件 (原实现的薄弱点)。
+        """
+        ids = []
+        for f in self._dir.glob("checkpoint_*.json"):
+            m = re.match(r"checkpoint_(\d+)\.json$", f.name)
+            if m:
+                ids.append(int(m.group(1)))
+        return (max(ids) + 1) if ids else 1
+
+    def _load_existing(self):
+        """扫描磁盘检查点目录, 重建内存元信息 (崩溃恢复的前提)。"""
+        self._dir.mkdir(parents=True, exist_ok=True)
+        for f in sorted(self._dir.glob("checkpoint_*.json")):
+            m = re.match(r"checkpoint_(\d+)\.json$", f.name)
+            if not m:
+                continue
+            cid = int(m.group(1))
+            try:
+                content = f.read_text(encoding="utf-8")
+                # 真正解析以检测损坏: 无法解析的检查点文件视为损坏, 跳过
+                json.loads(content)
+                h = hashlib.sha256(content.encode()).hexdigest()[:16]
+                ts = f.stat().st_mtime
+                self._checkpoints.append(StateCheckpoint(
+                    checkpoint_id=cid,
+                    timestamp=ts,
+                    state_hash=h,
+                    state_data={},
+                    file_path=str(f),
+                    size_bytes=len(content),
+                ))
+            except (OSError, json.JSONDecodeError):
+                # 损坏/不可读的检查点: 保留文件但跳过加载, 避免静默污染恢复链。
+                logger.warning("Skipping unreadable checkpoint file: %s", f)
+        self._checkpoints.sort(key=lambda c: c.checkpoint_id)
 
     def save_checkpoint(self, state: dict) -> StateCheckpoint:
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -56,10 +101,32 @@ class CrashStateRestore:
         state_json = json.dumps(state, sort_keys=True, default=str)
         state_hash = hashlib.sha256(state_json.encode()).hexdigest()[:16]
 
-        checkpoint_id = len(self._checkpoints) + 1
+        # 单调递增编号 (基于磁盘, 重启不碰撞/不覆盖)
+        checkpoint_id = self._next_checkpoint_id()
         file_path = self._dir / f"checkpoint_{checkpoint_id}.json"
+        tmp_path = file_path.with_suffix(".json.tmp")
 
-        file_path.write_text(state_json, encoding="utf-8")
+        # 原子写: 临时文件 -> fsync -> os.replace, 崩溃中途不留半截文件
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(state_json)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, file_path)
+        except BaseException:
+            # 写入失败: 清理残留临时文件, 不留下半截 .tmp
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+
+        # 写后校验 (fail-loud): 读回比对哈希, 不一致即抛错, 杜绝静默损坏
+        written = file_path.read_text(encoding="utf-8")
+        if hashlib.sha256(written.encode()).hexdigest()[:16] != state_hash:
+            raise IOError(f"Checkpoint write verification failed: {file_path}")
 
         checkpoint = StateCheckpoint(
             checkpoint_id=checkpoint_id,
