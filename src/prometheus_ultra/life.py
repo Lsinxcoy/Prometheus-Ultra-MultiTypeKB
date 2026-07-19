@@ -3057,6 +3057,14 @@ class Omega:
         if scan_source == ScanSource.HOST_EXPERIENCE:
             return self._learn_host_experience(query, max_results)
 
+        # 管道运行计数(监控可见性: 心跳/内部触发的 learn 也能被监控看到)
+        try:
+            self.nexus._pipelines.setdefault("learn", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["learn"]["runs"] += 1
+            self.nexus._pipelines["learn"]["last_run"] = time.time()
+        except Exception:
+            pass
+
         results = self.knowledge_scanner.scan(scan_source, query, max_results, force=True)
 
         # Step 2-3: remember each result
