@@ -61,9 +61,13 @@ class SkillRegistry:
             tags = tags or getattr(skill, 'tags', [])
             description = description or getattr(skill, 'description', '')
         
-        # 版本管理
-        current_version = self._versions.get(name, 0) + 1
-        self._versions[name] = current_version
+        # 版本管理: 调用方显式传入 version 时予以尊重(修复前该参数被静默忽略,
+        # 永远用自增 int 覆盖, 属幽灵参数); 未传入则自动递增。
+        if version:
+            current_version = version
+        else:
+            current_version = self._versions.get(name, 0) + 1
+            self._versions[name] = current_version
         
         entry = {
             "name": name,
@@ -76,6 +80,12 @@ class SkillRegistry:
             "last_invoked": None,
         }
         
+        # 重名再注册 = 发布新版本: 旧条目降级为 superseded, 保证每个 name
+        # 全局仅一个 active 条目(修复前 _skill_map 只指向最新而 _skills 累积全部
+        # 副本, 导致 get_active_skills/search 返回重复活跃条目, 违反不变量)。
+        existing = self._skill_map.get(name)
+        if existing is not None:
+            existing["status"] = "superseded"
         self._skills.append(entry)
         self._skill_map[name] = entry
         
