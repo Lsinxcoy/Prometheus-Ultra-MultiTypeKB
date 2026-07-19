@@ -14,7 +14,7 @@ from __future__ import annotations
 
 
 import logging
-import time, json, os
+import time, json, os, shutil
 from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
@@ -45,20 +45,57 @@ class ExplorerState:
             try:
                 with open(self._path, 'r') as f:
                     data = json.load(f)
+            except Exception as e:
+                logger.warning("Failed to load explorer state, trying backup: %s", e)
+                data = self._load_backup()
+            if data is not None:
                 self._today_rounds = data.get("today", [])
                 self._domain_counts = data.get("domains", {})
                 self._total_rounds = data.get("total", 0)
-            except Exception as e:
-                logger.warning("Failed to load explorer state: %s", e)
+
+    def _load_backup(self):
+        """Load previous good state from .bak. Returns dict or None if unusable."""
+        bak = self._path + ".bak"
+        if not os.path.exists(bak):
+            return None
+        try:
+            with open(bak, 'r') as f:
+                data = json.load(f)
+            logger.warning("Recovered explorer state from backup %s", bak)
+            return data
+        except Exception as e:
+            logger.error("Failed to load explorer state backup: %s", e)
+            return None
 
     def _flush(self):
         parent = os.path.dirname(self._path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(self._path, 'w') as f:
-            json.dump({"today": self._today_rounds[-50:],
-                       "domains": self._domain_counts,
-                       "total": self._total_rounds}, f)
+        data = {"today": self._today_rounds[-50:],
+                "domains": self._domain_counts,
+                "total": self._total_rounds}
+        # Backup the previous good state before overwriting (copy, not move,
+        # so a later failure in this flush never destroys the only good copy).
+        if os.path.exists(self._path):
+            try:
+                shutil.copyfile(self._path, self._path + ".bak")
+            except OSError as e:
+                logger.warning("Failed to backup explorer state: %s", e)
+        tmp = self._path + ".tmp"
+        try:
+            with open(tmp, 'w') as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._path)
+        except Exception as e:
+            logger.error("Failed to persist explorer state: %s", e)
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            raise
 
     def record_round(self, topic: str, domain: str, info_gain: float):
         r = {"topic": topic, "domain": domain, "gain": info_gain, "ts": time.time()}
