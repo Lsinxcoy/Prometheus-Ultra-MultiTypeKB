@@ -1,0 +1,25 @@
+[FAIL] health: {'_error': 'HTTP 502: '}
+[FAIL] recall: ok
+[FAIL] learn(arxiv+T4): {'_error': 'HTTP 502: '}
+[FAIL] evolve: ok
+[FAIL] maintain: ok
+[FAIL] t4_compile: compiled
+[OK] metrics: {'node_count': None, 'mechanisms_enabled': None, 'global_utility': None, 'active_host': None}
+📊 Ultra 运行监控 2026-07-19 15:08:41
+判定: BUG_DETECTED
+• health: ❌ (17.03s) {'_error': 'HTTP 502: '}
+• recall: ❌ (17.05s) ok
+• learn(arxiv+T4): ❌ (17.02s) {'_error': 'HTTP 502: '}
+• evolve: ❌ (17.03s) ok
+• maintain: ❌ (17.05s) ok
+• t4_compile: ❌ (17.03s) compiled
+• metrics: ✅ (17.02s) {'node_count': None, 'mechanisms_enabled': None, 'global_utility': None, 'active_host': None}
+
+🐛 发现BUG 6 个:
+  - health: 未修(待人工) 无文件:行号线索
+  - recall: 未修(待人工) 无文件:行号线索
+  - learn(arxiv+T4): 未修(待人工) 无文件:行号线索
+  - evolve: 未修(待人工) 无文件:行号线索
+  - maintain: 未修(待人工) 无文件:行号线索
+  - t4_compile: 未修(待人工) 无文件:行号线索
+[OK] 飞书发送成功 message_id=om_x100b6af3c9100d38c322a44145a739f

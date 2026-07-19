@@ -1260,7 +1260,8 @@ class Omega:
         self.vector_clock.increment()
         remember_data['vclock'] = self.vector_clock.get_clock()
         self.vector_clock.merge({"system": 1})
-        self.event_bus.publish({"type": "remember", "node_id": node.id})
+        # 注: 不发布裸 "remember" 进度事件 —— 订阅者统一监听 remember_completed (L1336,
+        # 携带 utility/tags). 裸 remember 无消费者会造成事件总线孤岛(island_topics).
         self.x_adapter.adapt({"node_id": node.id, "content": content})
         self.y_adapter.adapt({"node_id": node.id, "utility": utility})
 
@@ -2353,6 +2354,7 @@ class Omega:
 
         # Semantic Early-Stopping check
         ses_decision = self.semantic_early_stopping.check(context)
+        chain_trace["semantic"] = True  # 语义阶段已执行(无论放行/停止), 标记避免进化链误报缺失
         if ses_decision.should_stop:
             blocked = EvolutionOutcome(result=EvolutionResult.BLOCKED, details="semantic_early_stop")
             self._telemetry["evolve"] = blocked

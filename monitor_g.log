@@ -1,0 +1,19 @@
+[OK] health: {'status': 'healthy', 'service': 'prometheus-ultra', 'engine_health': 'healthy', 'detail': 'engine o
+[OK] recall: 7
+[OK] learn(arxiv+T4): compiled
+[OK] evolve: ok
+[OK] maintain: ok
+[OK] t4_compile: compiled
+[OK] metrics: {'node_count': 1512, 'mechanisms_enabled': 7, 'global_utility': 0.6995, 'active_host': None}
+📊 Ultra 运行监控 2026-07-19 15:14:52
+判定: OK
+• health: ✅ (0.02s) {'status': 'healthy', 'service': 'prometheus-ultra', 'engine_health': 'healthy', 'detail': 'engine online'}
+• recall: ✅ (4.0s) 7
+• learn(arxiv+T4): ✅ (2.82s) compiled
+• evolve: ✅ (0.82s) ok
+• maintain: ✅ (0.14s) ok
+• t4_compile: ✅ (21.63s) compiled
+• metrics: ✅ (2.94s) {'node_count': 1512, 'mechanisms_enabled': 7, 'global_utility': 0.6995, 'active_host': None}
+
+📈 Metrics: {'node_count': 1512, 'mechanisms_enabled': 7, 'global_utility': 0.6995}
+[OK] 飞书发送成功 message_id=om_x100b6af3d6470ca4dfbb6adde06ea95
