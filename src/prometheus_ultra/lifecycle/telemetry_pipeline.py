@@ -184,7 +184,9 @@ class TelemetryPipeline:
             history = self._history[pipe]
             history.append(snapshot)
             if len(history) > self._max_window:
-                self._history[pipe] = history[-self._max_window // 2:]
+                # 保留完整窗口容量(与 record() 及文档 max_window='每管道最大保留条数' 一致);
+                # 旧实现 self._max_window // 2 仅保留半数, 生产路径静默丢失一半遥测历史。
+                self._history[pipe] = history[-self._max_window:]
 
         except Exception as e:
             logger.warning("TelemetryPipeline._on_event: %s", e)
