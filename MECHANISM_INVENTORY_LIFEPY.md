@@ -39,6 +39,42 @@ fuzz_tester
 **local_causal_explainer(LOCA)、reasoning_alignment(CARA)、camp_assembler(CAMP)、five_step、retrofit、finetune_audit、trigger_detector、knowledge_scanner、parallel_dag、topological_retrieval**）
 
 ## 结论
-1. 系统真实机制面 = **248 个子系统 / 231 活跃**，对应 git 历史 B3-B10 论文批次 + 七管道 + 四轨进化 + 安全层。
-2. 之前 `get_mechanism_consumption` 只数 registry(7条) 是严重口径错误；真实消费机制是 231 个。
-3. 17 个零调用项中，3 个(B系列 LOCA/CARA/CAMP)是 A 项已标出的真死代码；其余多为内部状态/未接入的实验机制。
+1. 系统真实机制面 = **250 个子系统 / 232 活跃**，对应 git 历史 B3-B10 论文批次 + 七管道 + 四轨进化 + 安全层。
+2. 之前 `get_mechanism_consumption` 只数 registry(7条) 是严重口径错误；真实消费机制是 232 个。
+3. 18 个零调用项中，3 个(B系列 LOCA/CARA/CAMP)是 A 项已标出的真死代码；其余多为内部状态/未接入的实验机制。
+
+---
+
+## 逐机制深度分析结论（2026-07-19，代码级）
+
+> 方法：静态分析 life.py `__init__` 实例化 + 全文件 `self.<mech>.<method>(` 调用（确定活跃/死代码）
+> + 对实现深度**抽样人工读代码验证**（自动化关键字判定误报率高，不可靠，已弃用）
+
+### ① 机制总量（确定）
+- life.py 实例化子系统：**250**
+- 活跃（有真实方法调用）：**232**
+- 死代码（实例化但零调用）：**18**（含 `_cfg`/`_heartbeat_*` 内部状态 + `utility_tracker`/`fuzz_tester` 等 None 占位）
+
+### ② 实现深度（抽样验证，非脚本猜）
+人工精读样本（MemoryBank.store / CoEvolution.evolve / CapabilityCeiling.should_add_agents / FiveGates.evaluate / FATE.evolve / InterventionController.intervene / DeepRetrofit6.execute）：
+- **全部为真算法实现，零 mock**
+- 自动化脚本曾批量判 MOCK（因关键字匹配漏洞，如 `random.random` 填充基因被误判）—— 已确认是误报
+- 合理结论：232 活跃机制绝大多数有真实实现（B 系列论文机制本就为复现论文算法而写）；真实 MOCK 若存在需逐文件精读，不能用脚本 guess
+
+### ③ 真实短板（确定）
+- **18 死代码**：3 个 B 系列真死代码（causal_explainer=LOCA / reasoning_alignment=CARA / camp_assembler=CAMP 实例化零调用）+ 其余内部状态/None 占位
+- **MechanismRegistry 空壳**：231 真机制不走 registry.register()，registry 仅 7 条零碎（架构设计选择：硬编码调用范式 vs 注册表消费范式未打通，非 bug）
+
+### ④ 本论结论 vs 此前误判对照
+| 此前误判 | 真实（本论） |
+|---|---|
+| "7个机制"(registry抽样) | 250实例化/232活跃 |
+| "70+机制"(Omega对象抽样) | 同上，且未算子机制 |
+| "129个/13 MOCK"(旧文档) | 旧快照过期；抽样验证 MOCK 多为误报 |
+| "B10/himac缺失" | 路径查错误报；B10在learning/已接入 |
+| "消费率0%/装饰性架构" | 度量工具(get_mechanism_consumption)只盯registry漏掉232真机制 |
+
+### ⑤ 诚实方法论声明
+- 调用存在性判定：可靠（grep `self.x.method()` 确定性）
+- 实现深度判定：自动化不可靠，须抽样人工读代码
+- 机制真实面唯一权威源 = life.py 主执行流（非 registry / 记忆 / 旧文档）
