@@ -2428,9 +2428,17 @@ class Omega:
                         entry["name"], draft, base_mechanism)
                     if cls is not None:
                         inst = cls()
-                        self.nexus.mount_dynamic(entry["name"], inst, category="compiled")
-                        logger.info("Omega: Nexus 动态挂载 T4 机制 %s (神经发生完成)", entry["name"])
-                    else:
+                        # 接管语义(对齐 P6): 仅当宿主/论文显式声明覆盖的基本盘时才接管
+                        overrides_base = data.get("overrides_base")
+                        self.nexus.mount_dynamic(entry["name"], inst, category="compiled",
+                                                target_base=overrides_base)
+                        if overrides_base:
+                            logger.info("Omega: Nexus 动态挂载 T4 %s 并接管基本盘 %s (神经发生+接管闭环)",
+                                        entry["name"], overrides_base)
+                        else:
+                            logger.info("Omega: Nexus 动态挂载 T4 机制 %s (神经发生完成, 作候选不自动接管)",
+                                        entry["name"])
+
                         logger.warning("Omega: T4 %s 沙箱编译返回 None, 未挂载", entry["name"])
                 except Exception as e:
                     logger.warning("Omega: T4 nexus mount failed: %s", str(e)[:50])

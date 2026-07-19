@@ -249,6 +249,45 @@ def test_layer4_skill_instinct_in_nexus(omega):
     assert len(instincts_in_nexus) >= 0
 
 
+def test_layer6_effect_route_takeover_real(omega):
+    """[6] 效果路由真实性: 动态机制挂载重接管的真闭环(对齐 P6).
+
+    审计发现: 原 set_route_override 全仓库无调用点 -> 动态挂载后不接管(假绿).
+    修复: mount_dynamic(target_base=) 显式声明才接管, 否则仅候选不直替.
+    """
+    nx = omega.nexus
+    # 找一个真实基本盘机制(确保存在于 _base_instances)
+    base_name = None
+    for n, e in nx._mechanisms.items():
+        if e.get("category") != "pipeline" and n in nx._base_instances:
+            base_name = n
+            break
+    assert base_name is not None, "无可用基本盘机制"
+
+    class DynMech:
+        def run(self):
+            return {"via": "dynamic", "name": "dyn_test"}
+
+    # 1. 不声明 target_base -> 仅挂动态层, 不接管(对齐 P6 不自动直替)
+    nx.mount_dynamic("dyn_candidate_only", DynMech(), category="compiled")
+    assert "dyn_candidate_only" not in nx._route_override, "未声明 target_base 不应接管"
+    assert "dyn_candidate_only" in nx._dynamic, "应挂入动态层(候选)"
+
+    # 2. 声明 target_base -> 真接管(神经发生+接管闭环)
+    nx.mount_dynamic("dyn_takeover", DynMech(), category="compiled", target_base=base_name)
+    assert nx._route_override.get(base_name) == "dyn_takeover", "显式声明应接管基本盘"
+    # dispatch 基本盘名 -> 真走动态实例
+    routed = nx.dispatch(base_name, "run")
+    assert (routed or {}).get("via") == "dynamic", "接管后 dispatch 基本盘名应走动态"
+    # 回退: 动态变劣 -> override 真删除
+    for _ in range(5):
+        nx.record_effect(base_name, 0.8)
+    for _ in range(5):
+        nx.record_effect("dyn_takeover", -0.5)
+    assert base_name not in nx._route_override, "动态变劣应回退基本盘"
+    assert (nx.dispatch(base_name, "run") or {}).get("via") != "dynamic", "回退后不应走动态"
+
+
 def test_layer5_registry_paradigm_converged(omega):
     """[5] 注册表范式收敛: 本能/技能触发经 Nexus 统一调用图记账.
 

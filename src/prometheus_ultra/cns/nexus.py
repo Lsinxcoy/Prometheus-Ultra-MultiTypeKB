@@ -100,13 +100,20 @@ class Nexus:
             self._persist()
             return {"registered": True, "name": name, "category": category, "status": entry["status"]}
 
-    def mount_dynamic(self, name: str, instance: Any, category: str = "compiled") -> dict:
+    def mount_dynamic(self, name: str, instance: Any, category: str = "compiled",
+                      target_base: str | None = None) -> dict:
         """T3/T4 编译产物经沙箱加载后, 挂载进动态层 + 注册.
 
         这是"神经发生": 新机制长入大脑, 不碰基本盘源码.
+        接管语义(对齐 P6 不自动直替): 仅当显式声明 target_base(宿主/论文指明
+        覆盖哪个基本盘)时才设 route_override 接管; 否则仅挂动态层作候选.
         """
-        return self.register_mechanism(name, instance=instance, category=category,
-                                        pending=False, is_dynamic=True)
+        res = self.register_mechanism(name, instance=instance, category=category,
+                                      pending=False, is_dynamic=True)
+        if target_base and target_base in self._base_instances:
+            self.set_route_override(target_base, name)
+            logger.info("Nexus: 动态 %s 经显式声明接管基本盘 %s", name, target_base)
+        return res
 
     # ==================================================================
     # 7 管道注册
