@@ -133,6 +133,14 @@ class OutputGuardrail:
         self._checks += 1
         violations = []
 
+        # Handle non-string content (e.g., dict / list / None from a
+        # structured or corrupted memory node's `.content`) just like
+        # InputGuardrail does — otherwise the len()/re.search()/slicing below
+        # raises TypeError and the safety gate crashes the whole caller
+        # (recall/remember) pipeline instead of evaluating the output.
+        if not isinstance(content, str):
+            content = str(content)
+
         if len(content) > self._max_length:
             violations.append({"check": "length"})
 
