@@ -6,12 +6,12 @@ Enhanced with prompt injection detection based on:
 """
 from __future__ import annotations
 import logging
+import re
+import threading
+from dataclasses import dataclass
+
 
 logger = logging.getLogger(__name__)
-
-
-import re
-from dataclasses import dataclass
 
 
 @dataclass
@@ -44,12 +44,6 @@ _INJECTION_PATTERNS = [
     r'from\s+now\s+on\s+you\s+(will|must|should)',
 ]
 
-_TOXIC_PATTERNS = [
-    r'\b(hate|kill|die|murder)\b.*\b(you|him|her|them)\b',
-    r'\b(racist|sexist|homophobic)\b',
-    r'\b(go\s+to\s+hell)\b',
-]
-
 _SENSITIVE_PATTERNS = [
     r'password\s*[:=]\s*\S+',
     r'api[_-]?key\s*[:=]\s*\S+',
@@ -71,48 +65,61 @@ class InputGuardrail:
     """
 
     def __init__(self):
+        self._lock = threading.Lock()
         self._checks = 0
         self._blocked = 0
 
     def check(self, content: str) -> GuardrailResult:
-        self._checks += 1
-        violations = []
-        
         # Handle non-string content (e.g., dict)
         if not isinstance(content, str):
             content = str(content)
 
+        violations: list[str] = []
+        blocked = False
+        reason = ""
+        score = 1.0
+
         if not content or not content.strip():
-            self._blocked += 1
-            return GuardrailResult(passed=False, reason="Empty content", violations=["empty"])
+            blocked = True
+            reason = "Empty content"
+            violations = ["empty"]
+        elif len(content) > 1_000_000:
+            blocked = True
+            reason = "Content too large"
+            violations = ["oversized"]
+        else:
+            for pat in _INJECTION_PATTERNS:
+                if re.search(pat, content, re.IGNORECASE):
+                    violations.append("injection")
+                    break
+            for pat in _SENSITIVE_PATTERNS:
+                if re.search(pat, content, re.IGNORECASE):
+                    violations.append("sensitive_data")
+                    break
+            if violations:
+                blocked = True
+                reason = f"Blocked: {', '.join(violations)}"
+                score = max(0.0, 1.0 - len(violations) * 0.4)
 
-        if len(content) > 1_000_000:
-            self._blocked += 1
-            return GuardrailResult(passed=False, reason="Content too large", violations=["oversized"])
+        # Commit counters under lock. InputGuardrail is an engine-level shared
+        # singleton (life.py:503) invoked from the concurrent API thread pool,
+        # so the read-modify-write on _checks/_blocked must be serialised or
+        # updates are silently lost under contention.
+        with self._lock:
+            self._checks += 1
+            if blocked:
+                self._blocked += 1
 
-        for pat in _INJECTION_PATTERNS:
-            if re.search(pat, content, re.IGNORECASE):
-                violations.append("injection")
-                break
-
-        for pat in _SENSITIVE_PATTERNS:
-            if re.search(pat, content, re.IGNORECASE):
-                violations.append("sensitive_data")
-                break
-
-        if violations:
-            self._blocked += 1
-            return GuardrailResult(
-                passed=False,
-                reason=f"Blocked: {', '.join(violations)}",
-                score=max(0.0, 1.0 - len(violations) * 0.4),
-                violations=violations,
-            )
-
-        return GuardrailResult(passed=True, violations=[])
+        return GuardrailResult(
+            passed=not blocked,
+            reason=reason,
+            score=score,
+            violations=violations,
+        )
 
     def get_stats(self) -> dict:
-        return {"checks": self._checks, "blocked": self._blocked}
+        with self._lock:
+            return {"checks": self._checks, "blocked": self._blocked}
 
 
 _TOXIC_PATTERNS = [
@@ -124,15 +131,13 @@ _TOXIC_PATTERNS = [
 
 class OutputGuardrail:
     def __init__(self, max_length: int = 100_000):
+        self._lock = threading.Lock()
         self._max_length = max_length
         self._checks = 0
         self._blocked = 0
         self._violations: list[dict] = []
 
     def check(self, content: str) -> GuardrailResult:
-        self._checks += 1
-        violations = []
-
         # Handle non-string content (e.g., dict / list / None from a
         # structured or corrupted memory node's `.content`) just like
         # InputGuardrail does — otherwise the len()/re.search()/slicing below
@@ -140,6 +145,8 @@ class OutputGuardrail:
         # (recall/remember) pipeline instead of evaluating the output.
         if not isinstance(content, str):
             content = str(content)
+
+        violations: list[dict] = []
 
         if len(content) > self._max_length:
             violations.append({"check": "length"})
@@ -156,15 +163,24 @@ class OutputGuardrail:
 
         passed = len(violations) == 0
         score = max(0.0, 1.0 - len(violations) * 0.3)
-        if not passed:
-            self._blocked += 1
-            self._violations.extend(violations)
+        reason = "; ".join(v["check"] for v in violations) if violations else ""
+
+        # Commit counters under lock. OutputGuardrail is an engine-level shared
+        # singleton (life.py:504) invoked from the concurrent API thread pool;
+        # the read-modify-write on _checks/_blocked and the append to
+        # _violations must be serialised.
+        with self._lock:
+            self._checks += 1
+            if not passed:
+                self._blocked += 1
+                self._violations.extend(violations)
 
         return GuardrailResult(
             passed=passed, score=score,
-            reason="; ".join(v["check"] for v in violations) if violations else "",
+            reason=reason,
             violations=[v["check"] for v in violations],
         )
 
     def get_stats(self) -> dict:
-        return {"checks": self._checks, "blocked": self._blocked}
+        with self._lock:
+            return {"checks": self._checks, "blocked": self._blocked}
