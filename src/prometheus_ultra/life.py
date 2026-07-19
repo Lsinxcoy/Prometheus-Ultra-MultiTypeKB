@@ -569,6 +569,9 @@ class Omega:
 
         # ===== Mechanisms (3) =====
         self.mechanism_registry = MechanismRegistry(path="archive/mechanisms.json")
+        # Nexus: 神经系统统一中枢(统辖机制层+7管道+两层记忆+效果路由+修剪)
+        from prometheus_ultra.cns.nexus import Nexus
+        self.nexus = Nexus(path="archive/nexus.json", store=self.store)
         self.x_adapter = XMemoryAdapter()
         self.y_adapter = YBankAdapter()
 
@@ -941,9 +944,73 @@ class Omega:
         self._heartbeat_thread.start()
         logger.info("Heartbeat thread started (interval=%ds)", self._heartbeat_interval)
 
+        # ===== Nexus 统合: 批量注册 236 机制 + 7 管道 =====
+        self._nexus_register_all()
+
+    # ============================================================
+    # Nexus 统合 — 机制层 + 7 管道注册(神经系统统一中枢)
+    # ============================================================
+    def _nexus_register_all(self) -> None:
+        """批量注册全部机制 + 7 管道进 Nexus(零丢失, 不破坏现有执行).
+
+        设计: Nexus 是仲裁者, 不替代 life.py 实例. 注册仅建立
+        '机制名 -> 执行后端(self.x) + 分类 + 记账' 的映射.
+        """
+        import inspect
+        # category 从模块路径推导
+        DOMAIN_MAP = {
+            "safety": "safety", "evolution": "evolution", "memory": "memory",
+            "learning": "learning", "lifecycle": "lifecycle", "loop": "loop",
+            "execution": "execution", "harness": "harness", "integration": "integration",
+            "monitor": "monitor", "cns": "cns", "foundation": "foundation",
+            "skills": "skill", "reasoning": "reasoning", "model": "model",
+        }
+        registered = 0
+        skipped = 0
+        for attr, val in list(self.__dict__.items()):
+            if attr.startswith("_") or attr in ("nexus", "mechanism_registry",
+                                                 "store", "event_bus", "host", "llm",
+                                                 "server", "monitor", "x_adapter", "y_adapter",
+                                                 "schema", "config", "curator", "skill_claw"):
+                continue
+            if val is None or not hasattr(val, "__class__"):
+                continue
+            module = getattr(val.__class__, "__module__", "") or ""
+            domain = "general"
+            for k, v in DOMAIN_MAP.items():
+                if f".{k}." in f".{module}." or module.endswith(f".{k}"):
+                    domain = v
+                    break
+            try:
+                self.nexus.register_mechanism(attr, instance=val, category=domain)
+                registered += 1
+            except Exception as e:
+                skipped += 1
+                logger.debug("Nexus register %s skipped: %s", attr, str(e)[:40])
+        # 7 管道注册(用真实方法名)
+        pipe_methods = {}
+        for pname in ("remember", "recall", "evolve", "learn", "reflect", "dream_cycle", "maintain"):
+            fn = getattr(self, pname, None)
+            if callable(fn):
+                pipe_methods[pname] = fn
+        for pname, fn in pipe_methods.items():
+            self.nexus.register_pipeline(pname, fn)
+            # 管道也注册进 _mechanisms(让消费率/记账口径一致), 不传实例(dispatch 不走管道)
+            self.nexus.register_mechanism(pname, category="pipeline")
+            # 包装: 管道调用时自动 mark_invoked(记账, 不双重执行)
+            # 注意: 实例属性上的函数是裸函数, 不会自动绑定 self,
+            # 必须用闭包捕获 self(外层 __init__ 的 self)
+            _self = self
+            orig = fn
+            def _wrapped(*a, _orig=orig, _pn=pname, **kw):
+                _self.nexus.mark_invoked(_pn)
+                return _orig(*a, **kw)
+            _wrapped.__name__ = pname
+            setattr(self, pname, _wrapped)
+        logger.info("Nexus: 注册机制 %d (跳过 %d), 7 管道已注册", registered, skipped)
+
     # ============================================================
     # heartbeat — 自发周期循环，减少对 Hermes cron 的依赖
-    # ============================================================
     def _heartbeat_loop(self):
         """Daemon thread: 每 _heartbeat_interval 秒触发 learn，
         CNS 链自动完成 reflect → evolve → dream → maintain。"""
@@ -953,7 +1020,7 @@ class Omega:
                 if not self._heartbeat_running:
                     break
                 # 触发 learn，CNS 会链式触发剩余管道
-                # P2-1: 有长期关注主题时, 优先扫这些主题(而非固定"auto heartbeat")
+
                 hb_query = "auto heartbeat"
                 if getattr(self, "focus_topics", None):
                     top = self.focus_topics.most_common(1)
@@ -2296,7 +2363,7 @@ class Omega:
         spec = {
             "name": entry["name"],
             "category": "compiled",
-
+            "target_location": data.get("target_location", {}),
             "draft_code": data.get("draft_code", ""),
             "claim": data.get("paper", ""),
             "activated_at": entry.get("activated_at"),
@@ -2305,6 +2372,19 @@ class Omega:
             ok = self.host.emit_capability(spec)
             self.attribution_scoring.complete_work_item(item_id)
             logger.info("Omega: T4 %s emitted to host (accepted=%s)", entry["name"], ok)
+            # Nexus 神经发生: T4 编译产物经沙箱加载 -> 动态层挂载(不碰基本盘)
+            draft = data.get("draft_code", "")
+            if draft and ok is not False:
+                try:
+                    from prometheus_ultra.integration.mechanism_sandbox import MechanismSandbox
+                    from prometheus_ultra.mechanisms import base_mechanism
+                    cls = MechanismSandbox().load(entry["name"], draft, base_mechanism)
+                    if cls is not None:
+                        inst = cls()
+                        self.nexus.mount_dynamic(entry["name"], inst, category="compiled")
+                        logger.info("Omega: Nexus 动态挂载 T4 机制 %s", entry["name"])
+                except Exception as e:
+                    logger.warning("Omega: T4 nexus mount failed: %s", str(e)[:50])
             return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
         except Exception as e:
             self.attribution_scoring.fail_work_item(item_id, str(e)[:60])
@@ -3001,7 +3081,7 @@ class Omega:
                 self.learn_feedback.register(node_id, source=source, query=query)
                 # 【Phase1】T3/T4 轨道真调用机制提取/编译(接回进化引擎/宿主)
                 try:
-                    node = self.store.get_node(node_id)
+                    node = self.store.read_node(node_id)
                     if ntype == NodeType.PROJECT and node is not None:
                         ext = self.mechanism_extractor.extract_from_node(node)
                         if ext is not None:
@@ -4557,6 +4637,21 @@ class Omega:
             snap["silent_by_category"] = silent_by_category
 
             snap["rate"] = round(snap["consumed"] / max(1, snap["total"]), 4)
+
+            # 7. Nexus 统一中枢(权威真相源, 覆盖前6载体的漏算)
+            # 前6载体只统计 registry/skill/gene/handbook/instinct/harness,
+            # 漏掉 life.py 主流程的 236 机制 -> 消费率失真.
+            # Nexus 注册了全部基本盘 + 动态层, 其计数才是真实消费.
+            nx = getattr(self, "nexus", None)
+            if nx is not None:
+                nc = nx.get_consumption()
+                snap["nexus_authority"] = nc
+                # 用 Nexus 真实数据覆盖(主流程机制才是系统真实机制面)
+                snap["total"] = nc["total"]
+                snap["consumed"] = nc["consumed"]
+                snap["rate"] = round(nc["rate"], 4)
+                snap["dynamic_count"] = nc["dynamic"]
+                snap["by_category"] = nc["by_category"]
             return snap
         except Exception as e:
             logger.debug("get_mechanism_consumption failed: %s", e)

@@ -253,6 +253,10 @@ class UltraAPIServer:
             if not self.omega:
                 raise HTTPException(status_code=503, detail="Omega not initialized")
             s = self.omega.status()
+            # Nexus 神经中枢统合状态(真实消费率, 非旧6载体漏算)
+            nx = getattr(self.omega, "nexus", None)
+            nexus_stats = nx.get_stats() if nx else {}
+            nexus_consumption = nx.get_consumption() if nx else {}
             return {
                 "node_count": s.node_count,
                 "edge_count": s.edge_count,
@@ -262,6 +266,10 @@ class UltraAPIServer:
                 "version": s.version,
                 "mechanisms": s.mechanisms,
                 "details": s.details,
+                "nexus": {
+                    "stats": nexus_stats,
+                    "consumption": nexus_consumption,
+                },
             }
 
         @app.post("/api/v1/remember", response_model=PipelineResponse)

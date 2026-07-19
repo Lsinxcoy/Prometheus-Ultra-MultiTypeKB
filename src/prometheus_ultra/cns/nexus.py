@@ -1,0 +1,306 @@
+"""Nexus — 神经系统统一中枢.
+
+设计定位(2026-07-19 架构决策):
+    Ultra = 外挂记忆 / 自进化生命体的大脑.
+    Nexus 是这套神经系统的**统一神经中枢**, 统辖:
+      - 机制层: 236 基本盘机制 + 动态层(T3/T4 编译产物)
+      - 7 管道: remember/recall/evolve/learn/reflect/dream/maintain
+      - 两层共享记忆:
+          ① 知识记忆 (MinervaStore, 7管道共享)  —— 数据层, Nexus 引用不替换
+          ② 机制经验记忆 (effect 账本)           —— 机制共享"什么有效/有害"
+      - 效果路由: 动态机制实战更优则接管基本盘对应功能(fallback 永驻)
+      - 突触修剪: 效果账本负向机制自动 deactivate
+
+关键不变量(防回归):
+    - Nexus 是**仲裁者**, 不是执行者. 机制执行后端仍是 life.py 的实例(self.x).
+      dispatch() 查状态/效果/路由后, 转调 self.x.method(), 绝不双重执行.
+    - 不吞并 MinervaStore / ModelRouter (数据层/后端层, 仅引用).
+    - 236 基本盘机制全注册, 零丢失.
+
+基于现有 MechanismRegistry 升级(复用 register/verify_and_activate/prune_harmful/
+record_mechanism_effect), 新增: 管道注册, 动态层挂载, dispatch 仲裁, 效果路由.
+"""
+from __future__ import annotations
+import logging
+import time
+import threading
+from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
+
+
+class Nexus:
+    """神经系统统一中枢.
+
+    统辖机制层 + 7管道 + 两层记忆 + 效果路由 + 突触修剪.
+    是仲裁者(决定调谁/怎么调/效果如何), 非执行者(执行仍由 life.py 实例).
+    """
+
+    def __init__(self, path: str | None = None, store=None):
+        self._path = path
+        self._store = store  # 知识记忆层(引用, 不替换)
+        self._lock = threading.RLock()
+
+        # ---- 机制层 ----
+        self._mechanisms: dict[str, dict] = {}        # name -> entry
+        self._enabled: set[str] = set()
+        self._dynamic: dict[str, Any] = {}            # 动态层: name -> 可执行实例(sandbox加载)
+        self._base_instances: dict[str, Any] = {}     # 基本盘: name -> life.py 实例(执行后端)
+
+        # ---- 7 管道注册 ----
+        self._pipelines: dict[str, dict] = {}         # name -> {fn, last_run, runs, failures}
+
+        # ---- 两层记忆 ----
+        # ① 知识记忆: 经 self._store 读写 (Nexus 不持有, 仅引用)
+        # ② 机制经验记忆: effect 账本
+        self._effects: dict[str, list[float]] = {}    # name -> [effect,...]
+        self._invoke_count: dict[str, int] = {}       # name -> 调用次数(记账)
+        self._last_invoked: dict[str, float] = {}
+
+        # ---- 路由覆盖: 动态机制接管基本盘 (name -> 动态 name) ----
+        self._route_override: dict[str, str] = {}
+
+        self._load()
+
+    # ==================================================================
+    # 机制注册 (基本盘 + 动态层)
+    # ==================================================================
+    def register_mechanism(self, name: str, instance: Any = None,
+                           category: str = "general", pending: bool = False,
+                           is_dynamic: bool = False) -> dict:
+        """注册机制. 基本盘或动态层统一入口.
+
+        Args:
+            name: 机制名(与 life.py self.<name> 对齐)
+            instance: 执行后端实例(life.py 的 self.x)
+            category: 功能域(safety/evolution/memory/learning/...)
+            pending: True=待验证激活(动态层编译产物)
+            is_dynamic: True=动态层(T3/T4), False=基本盘
+        """
+        with self._lock:
+            entry = {
+                "name": name,
+                "category": category,
+                "status": "pending" if pending else "active",
+                "is_dynamic": is_dynamic,
+                "invoke_count": 0,
+                "error_count": 0,
+                "last_invoked": None,
+                "activated_at": None if pending else time.time(),
+                "effect": 0.0,
+            }
+            self._mechanisms[name] = entry
+            if not pending:
+                self._enabled.add(name)
+            if instance is not None:
+                if is_dynamic:
+                    self._dynamic[name] = instance
+                else:
+                    self._base_instances[name] = instance
+            self._persist()
+            return {"registered": True, "name": name, "category": category, "status": entry["status"]}
+
+    def mount_dynamic(self, name: str, instance: Any, category: str = "compiled") -> dict:
+        """T3/T4 编译产物经沙箱加载后, 挂载进动态层 + 注册.
+
+        这是"神经发生": 新机制长入大脑, 不碰基本盘源码.
+        """
+        return self.register_mechanism(name, instance=instance, category=category,
+                                        pending=False, is_dynamic=True)
+
+    # ==================================================================
+    # 7 管道注册
+    # ==================================================================
+    def register_pipeline(self, name: str, fn: Callable, category: str = "pipe") -> dict:
+        """注册 7 管道之一. Nexus 统辖触发/协同/记忆读写."""
+        with self._lock:
+            self._pipelines[name] = {"fn": fn, "category": category,
+                                      "last_run": None, "runs": 0, "failures": 0}
+            return {"registered": True, "name": name}
+
+    # ==================================================================
+    # 调度仲裁 (dispatch) — 核心: 查状态/效果/路由, 转调执行后端, 记账
+    # ==================================================================
+    def dispatch(self, name: str, method: str = "run", context: dict | None = None,
+                 *args, **kwargs) -> Any:
+        """仲裁调用机制. 不双重执行 — 转调 life.py 实例, 仅记账+路由.
+
+        路由逻辑:
+          1. 若有 route_override[name] -> 用动态机制接管
+          2. 否则用基本盘实例
+          3. 实例不存在/未激活 -> 返回 None(不崩)
+        """
+        with self._lock:
+            target = self._route_override.get(name, name)
+            inst = self._dynamic.get(target) or self._base_instances.get(target)
+            if inst is None:
+                logger.debug("Nexus.dispatch: %s 无执行后端, 跳过", name)
+                return None
+            entry = self._mechanisms.get(target)
+            if entry and entry["status"] not in ("active", "enabled"):
+                logger.debug("Nexus.dispatch: %s 状态=%s 未激活, 跳过", target, entry["status"])
+                return None
+            # 记账
+            self._invoke_count[name] = self._invoke_count.get(name, 0) + 1
+            self._last_invoked[name] = time.time()
+            if entry:
+                entry["invoke_count"] = entry["invoke_count"] + 1
+                entry["last_invoked"] = time.time()
+        # 转调执行后端(不双重执行)
+        try:
+            fn = getattr(inst, method, None)
+            if fn is None:
+                return None
+            return fn(*args, **kwargs)
+        except Exception as e:
+            with self._lock:
+                if entry:
+                    entry["error_count"] = entry["error_count"] + 1
+            logger.warning("Nexus.dispatch: %s.%s 失败: %s", name, method, str(e)[:60])
+            return None
+
+    def mark_invoked(self, name: str) -> None:
+        """轻量记账(供 life.py 直接调用点补记, 不转调)."""
+        with self._lock:
+            self._invoke_count[name] = self._invoke_count.get(name, 0) + 1
+            self._last_invoked[name] = time.time()
+            if name in self._mechanisms:
+                self._mechanisms[name]["invoke_count"] += 1
+                self._mechanisms[name]["last_invoked"] = time.time()
+
+    # ==================================================================
+    # 效果路由 (优势强化) — 动态机制实战更优则接管基本盘
+    # ==================================================================
+    def record_effect(self, name: str, effect: float) -> None:
+        """记录机制实战效果(经验记忆). 同时记账一次调用."""
+        with self._lock:
+            self._invoke_count[name] = self._invoke_count.get(name, 0) + 1
+            self._last_invoked[name] = time.time()
+            if name in self._mechanisms:
+                self._mechanisms[name]["invoke_count"] += 1
+                self._mechanisms[name]["last_invoked"] = time.time()
+            self._effects.setdefault(name, []).append(effect)
+            eff = sum(self._effects[name][-20:]) / len(self._effects[name][-20:])
+            if name in self._mechanisms:
+                self._mechanisms[name]["effect"] = eff
+            # 路由决策: 动态机制效果持续优于其覆盖的基本盘 -> 接管
+            for base, dyn in list(self._route_override.items()):
+                if dyn == name:
+                    base_eff = self._avg_effect(base)
+                    if eff > base_eff + 0.05:  # 动态更优阈值
+                        logger.info("Nexus: 动态 %s 接管基本盘 %s (eff %.3f > %.3f)",
+                                     name, base, eff, base_eff)
+                    elif eff < base_eff - 0.1:  # 动态变劣 -> 回退基本盘
+                        logger.info("Nexus: 动态 %s 回退基本盘 %s (eff %.3f < %.3f)",
+                                     name, base, eff, base_eff)
+                        del self._route_override[base]
+
+    def _avg_effect(self, name: str) -> float:
+        effs = self._effects.get(name, [])
+        return sum(effs[-20:]) / len(effs[-20:]) if effs else 0.0
+
+    def set_route_override(self, base_name: str, dynamic_name: str) -> None:
+        """显式让动态机制接管基本盘功能(需先经 verify_and_activate + 效果验证)."""
+        with self._lock:
+            self._route_override[base_name] = dynamic_name
+
+    # ==================================================================
+    # 突触修剪 (淘汰有害/无效机制)
+    # ==================================================================
+    def prune_harmful(self, threshold: float = -0.3) -> list[str]:
+        """效果账本负向机制自动 deactivate(突触修剪). 基本盘不删, 仅动态层可修剪."""
+        pruned = []
+        with self._lock:
+            for name, entry in self._mechanisms.items():
+                if not entry.get("is_dynamic", False):
+                    continue  # 基本盘永驻, 不修剪
+                eff = entry.get("effect", 0.0)
+                inv = entry.get("invoke_count", 0)
+                if inv >= 3 and eff <= threshold:
+                    entry["status"] = "disabled"
+                    self._enabled.discard(name)
+                    if name in self._dynamic:
+                        del self._dynamic[name]
+                    for b, d in list(self._route_override.items()):
+                        if d == name:
+                            del self._route_override[b]
+                    pruned.append(name)
+        if pruned:
+            self._persist()
+            logger.info("Nexus: 突触修剪 %d 个有害动态机制: %s", len(pruned), pruned)
+        return pruned
+
+    # ==================================================================
+    # 消费/健康 (统一真相源, 供监控只读)
+    # ==================================================================
+    def get_consumption(self) -> dict:
+        """机制消费真实统计(替代旧 get_mechanism_consumption 的6载体聚合漏算)."""
+        with self._lock:
+            total = len(self._mechanisms)
+            consumed = sum(1 for e in self._mechanisms.values()
+                           if e.get("invoke_count", 0) > 0)
+            dyn = sum(1 for e in self._mechanisms.values() if e.get("is_dynamic"))
+            return {
+                "total": total, "consumed": consumed,
+                "rate": (consumed / total) if total else 0.0,
+                "dynamic": dyn, "base": total - dyn,
+                "by_category": self._by_category(),
+            }
+
+    def _by_category(self) -> dict:
+        cats: dict[str, int] = {}
+        for e in self._mechanisms.values():
+            c = e.get("category", "general")
+            cats[c] = cats.get(c, 0) + 1
+        return cats
+
+    def get_stats(self) -> dict:
+        with self._lock:
+            return {
+                "mechanisms": len(self._mechanisms),
+                "enabled": len(self._enabled),
+                "dynamic": len(self._dynamic),
+                "pipelines": len(self._pipelines),
+                "route_overrides": len(self._route_override),
+                "total_invocations": sum(self._invoke_count.values()),
+                "by_category": self._by_category(),
+            }
+
+    # ==================================================================
+    # 持久化
+    # ==================================================================
+    def _persist(self) -> None:
+        if not self._path:
+            return
+        import json, os
+        try:
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            blob = {
+                "mechanisms": {k: {kk: vv for kk, vv in v.items()
+                                    if kk not in ("instance",)}
+                               for k, v in self._mechanisms.items()},
+                "enabled": sorted(self._enabled),
+                "dynamic_names": sorted(self._dynamic.keys()),
+                "route_override": self._route_override,
+            }
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(blob, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self._path)
+        except Exception as e:
+            logger.warning("Nexus._persist failed: %s", e)
+
+    def _load(self) -> None:
+        if not self._path:
+            return
+        import json, os
+        if not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                blob = json.load(f)
+            self._mechanisms = blob.get("mechanisms", {})
+            self._enabled = set(blob.get("enabled", []))
+            self._route_override = blob.get("route_override", {})
+        except Exception as e:
+            logger.warning("Nexus._load failed: %s", e)
