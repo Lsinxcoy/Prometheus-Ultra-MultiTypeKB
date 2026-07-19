@@ -117,9 +117,21 @@ class EDREReplicator:
     # ── public API (unchanged) ────────────────────────────────────────────────
 
     def replicate(self, data: dict | None = None, fitness: float = 0.5):
-        """Add/update a population with given fitness."""
+        """Add/update a population with given fitness.
+
+        NOTE: 调用方两种风格都可能出现 —— (a) fitness 放在 data 字典内
+        (life.py:2492 `replicate({"context": ctx, "fitness": fitness_before})`),
+        或 (b) 作为关键字参数传入 (文档示例 `replicate({"context": "coding"},
+        fitness=0.8)`). 此处以 data["fitness"] 优先、缺失时回退到关键字参数
+        (默认 0.5), 保证两种风格都得到真实适应度。否则 (a) 风格的 fitness
+        会被静默丢弃、EDRE 每轮只记录常量 0.5, 选择压力退化为无差异 ——
+        真实进化适应度信号丢失 (演化/监控盲区)。
+        """
         data = data or {}
         context = data.get("context", "default")
+
+        # 兼容: fitness 经 data["fitness"] 或关键字参数传入, 字典优先
+        fitness = data.get("fitness", fitness)
 
         if context not in self._populations:
             self._populations[context] = 1.0
