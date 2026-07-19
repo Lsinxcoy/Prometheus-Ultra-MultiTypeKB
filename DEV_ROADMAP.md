@@ -45,8 +45,9 @@
 2. **接入层**：grep `self.<mech>.<method>(` 在 life.py 主流程的调用次数
 
 ### 文件组织真相（修正"虚假繁荣"误判）
-B 系列机制**不是独立文件**（compass.py/cara.py 等搜不到），而是**聚合进 `b7_remaining.py`(805行/5类)、`b8_remaining.py`(797行/11类)、`b9_remaining.py`(767行/6类)、`safety/*.py`**。
-旧仓库有 `b10_remaining.py` + `harness/himac_planner.py`，**当前 MultiTypeKB 分叉时 B10 批次 + HiMAC planner 未带过来**（MISSING）。
+B 系列机制**不是独立文件**（compass.py/cara.py 等搜不到），而是**聚合进 `b7_remaining.py`(805行/5类)、`b8_remaining.py`(797行/11类)、`b9_remaining.py`(767行/6类)、`learning/b10_remaining.py`(644行/6类)、`safety/*.py`**。
+**B10 已带入当前分支**（路径在 `learning/` 非 `evolution/`，此前误报 MISSING 已修正）：`SubtleMemoryBenchmark` 已接入 life.py:1969 真调用；其余 5 类(TokenArenaAdapter/RevisionDiscipline/KnowledgeToSkillPipeline/TraceUtility 等)为定义但零调用的实验机制。
+`harness/himac_planner.py` 在当前分支确实存在(HiMACPlanner 已接入主流程，见接入层表)，此前 MISSING 误报亦修正。
 
 ### 接入层验证（life.py 主流程真实调用）
 | 机制类 | 方法调用次数 | 状态 |
