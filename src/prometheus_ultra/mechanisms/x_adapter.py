@@ -200,23 +200,35 @@ class XMemoryAdapter:
             try:
                 return float(value)
             except ValueError:
+                logger.warning(
+                    "XMemoryAdapter._to_timestamp: 非法时间戳 %r, 回退 0.0(epoch)", value
+                )
                 return 0.0
+        logger.warning(
+            "XMemoryAdapter._to_timestamp: 非数值类型 %r, 回退 0.0(epoch)", value
+        )
         return 0.0
-    
+
     @staticmethod
     def _to_float(value) -> float:
         """转为浮点数."""
         try:
             return float(value)
         except (ValueError, TypeError):
+            logger.warning(
+                "XMemoryAdapter._to_float: 非法浮点 %r, 回退 0.0", value
+            )
             return 0.0
-    
+
     @staticmethod
     def _to_int(value) -> int:
         """转为整数."""
         try:
             return int(value)
         except (ValueError, TypeError):
+            logger.warning(
+                "XMemoryAdapter._to_int: 非法整数 %r, 回退 0", value
+            )
             return 0
     
     def get_stats(self) -> dict:
