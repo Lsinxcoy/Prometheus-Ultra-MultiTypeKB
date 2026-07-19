@@ -375,15 +375,18 @@ class NexusProxy:
         inst = object.__getattribute__(self, "_instance")
         nexus = object.__getattribute__(self, "_nexus")
         name = object.__getattribute__(self, "_name")
-        try:
-            nexus.mark_invoked(name)
-        except Exception:
-            pass
-        # 效果路由: 动态层接管则转动态实例
+        attr = getattr(inst, item)
+        # 仅可调用方法转发时记账(属性读取如 .enabled 不污染消费率统计)
+        if callable(attr):
+            try:
+                nexus.mark_invoked(name)
+            except Exception:
+                pass
+        # 效果路由: 动态层接管则转动态实例(仅当 item 在动态实例上)
         target = nexus._route_override.get(name)
         if target and target in nexus._dynamic and hasattr(nexus._dynamic[target], item):
             return getattr(nexus._dynamic[target], item)
-        return getattr(inst, item)
+        return attr
 
     def __setattr__(self, key, value):
         object.__getattribute__(self, "_instance").__setattr__(key, value)
