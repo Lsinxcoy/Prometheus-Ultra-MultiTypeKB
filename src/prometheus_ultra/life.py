@@ -1009,6 +1009,23 @@ class Omega:
             setattr(self, pname, _wrapped)
         logger.info("Nexus: 注册机制 %d (跳过 %d), 7 管道已注册", registered, skipped)
 
+        # 第二层: 统一调度 — 将已注册的机制实例包成 NexusProxy,
+        # 所有调用透明过 Nexus(记账+效果路由), 零侵入 5000 行调用点.
+        from prometheus_ultra.cns.nexus import NexusProxy
+        proxied = 0
+        for attr, entry in list(self.nexus._mechanisms.items()):
+            if entry.get("category") == "pipeline":
+                continue  # 管道是方法, 不代理
+            inst = self.nexus._base_instances.get(attr)
+            if inst is None:
+                continue
+            try:
+                self.__dict__[attr] = NexusProxy(inst, self.nexus, attr)
+                proxied += 1
+            except Exception as e:
+                logger.debug("Nexus proxy wrap %s skipped: %s", attr, str(e)[:40])
+        logger.info("Nexus: 统一调度代理包裹 %d 个机制", proxied)
+
     # ============================================================
     # heartbeat — 自发周期循环，减少对 Hermes cron 的依赖
     def _heartbeat_loop(self):

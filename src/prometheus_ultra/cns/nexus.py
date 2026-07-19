@@ -304,3 +304,47 @@ class Nexus:
             self._route_override = blob.get("route_override", {})
         except Exception as e:
             logger.warning("Nexus._load failed: %s", e)
+
+
+# ==================================================================
+# NexusProxy — 第二层: 统一调度的透明代理
+# ==================================================================
+class NexusProxy:
+    """透明代理包裹机制实例, 让所有调用过 Nexus 统一调度中枢.
+
+    设计(零侵入调用点):
+      - 用 __getattr__ 转发所有属性/方法调用到 wrapped 真实实例(透明)
+      - 每次访问: nexus.mark_invoked(name) 记账 + 检查 route_override
+        决定转基本盘或动态层(优势强化路由)
+      - 不双重执行: 代理只转发, 不额外执行(底层实例是唯一执行者)
+      - 满足 is not None / 直接属性访问(透明, 不破坏 5000 行调用点)
+      - 经代码核查: 全仓库无 isinstance(self.x) 检查, 仅 is not None 检查(代理满足)
+
+    使用: self.five_gates = NexusProxy(real_fg, nexus, "five_gates")
+    """
+
+    def __init__(self, instance, nexus, name):
+        object.__setattr__(self, "_instance", instance)
+        object.__setattr__(self, "_nexus", nexus)
+        object.__setattr__(self, "_name", name)
+
+    def __getattr__(self, item):
+        # __getattr__ 仅在实例自身无此属性时触发(方法在 _instance 上)
+        inst = object.__getattribute__(self, "_instance")
+        nexus = object.__getattribute__(self, "_nexus")
+        name = object.__getattribute__(self, "_name")
+        try:
+            nexus.mark_invoked(name)
+        except Exception:
+            pass
+        # 效果路由: 动态层接管则转动态实例
+        target = nexus._route_override.get(name)
+        if target and target in nexus._dynamic and hasattr(nexus._dynamic[target], item):
+            return getattr(nexus._dynamic[target], item)
+        return getattr(inst, item)
+
+    def __setattr__(self, key, value):
+        object.__getattribute__(self, "_instance").__setattr__(key, value)
+
+    def __delattr__(self, key):
+        object.__getattribute__(self, "_instance").__delattr__(key)

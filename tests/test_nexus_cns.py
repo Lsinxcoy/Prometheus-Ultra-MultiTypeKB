@@ -139,3 +139,41 @@ def test_e2e_seven_pipelines_run(omega):
     assert stats["total_invocations"] >= 7, f"管道调用记账不足: {stats['total_invocations']}"
     cons = omega.get_mechanism_consumption()
     assert cons["consumed"] > 0
+
+
+def test_layer2_unified_dispatch_proxy(omega):
+    """第二层: 统一调度 — 机制实例被 NexusProxy 包裹, 调用透明过 Nexus 记账+路由."""
+    from prometheus_ultra.cns.nexus import NexusProxy
+    fg = omega.five_gates
+    assert isinstance(fg, NexusProxy), f"five_gates 未被代理: {type(fg)}"
+    before = omega.nexus._invoke_count.get("five_gates", 0)
+    _ = fg.get_stats() if hasattr(fg, "get_stats") else None
+    after = omega.nexus._invoke_count.get("five_gates", 0)
+    assert after > before, "代理调用未记账(统一调度失效)"
+    assert omega.five_gates is not None
+
+
+def test_layer2_effect_routing_via_proxy(omega):
+    """第二层: 效果路由 — 动态机制接管基本盘后, 经代理调用自动转动态实例."""
+    from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism
+    from prometheus_ultra.cns.nexus import NexusProxy
+    class BaseMech(BaseMechanism):
+        name = "routing_base"
+        category = "safety"
+        def run(self, context=None):
+            return {"ok": True}
+        def check(self, x=None):
+            return {"via": "base"}
+    class DynMech(BaseMechanism):
+        name = "routing_dyn"
+        category = "compiled"
+        def run(self, context=None):
+            return {"ok": True}
+        def check(self, x=None):
+            return {"via": "dynamic"}
+    omega.nexus.register_mechanism("routing_base", instance=BaseMech(), category="safety")
+    omega.nexus.mount_dynamic("routing_dyn", DynMech())
+    omega.nexus.set_route_override("routing_base", "routing_dyn")
+    proxy = NexusProxy(BaseMech(), omega.nexus, "routing_base")
+    result = proxy.check()
+    assert result["via"] == "dynamic", f"效果路由未生效: {result}"
