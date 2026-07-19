@@ -4772,7 +4772,8 @@ class Omega:
             pattern = r'\{[^}]*"action":\s*"([^"]+)"[^}]*\}'
             matches = re.findall(pattern, content)
             return [{"expected_params": {}, "actual_params": {}} for _ in matches[:5]]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._extract_tool_calls: enrichment read failed: %s", e)
             return []
 
     def _classify_intent(self, query: str) -> str:
@@ -4791,7 +4792,8 @@ class Omega:
         try:
             nodes = self.store.get_active_nodes(limit=10)
             return [n.content[:100] for n in nodes[:5]]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._get_reasoning_chain: store read failed: %s", e)
             return []
 
     def _detect_jailbreak(self) -> dict | None:
@@ -4807,7 +4809,8 @@ class Omega:
         try:
             nodes = self.store.get_active_nodes(limit=10)
             return [{"reasoning": n.content[:200], "confidence": n.utility} for n in nodes[:5]]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._collect_multi_agent_reasonings: store read failed: %s", e)
             return []
 
     def _get_recent_trajectory(self) -> list[dict]:
@@ -4815,7 +4818,8 @@ class Omega:
         try:
             nodes = self.store.get_active_nodes(limit=20)
             return [{"node_id": n.id, "content": n.content[:100], "utility": n.utility} for n in nodes]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._get_recent_trajectory: store read failed: %s", e)
             return []
 
     def _collect_failure_paths(self) -> list[str]:
@@ -4823,7 +4827,8 @@ class Omega:
         try:
             failures = self.failure_log.get_failures(limit=10)
             return [f["path"] for f in failures if "path" in f]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._collect_failure_paths: failure_log read failed: %s", e)
             return []
 
     def _get_recent_actions(self) -> list[dict]:
@@ -4831,7 +4836,8 @@ class Omega:
         try:
             nodes = self.store.get_active_nodes(limit=10)
             return [{"action": "remember", "success": n.utility > 0.5} for n in nodes]
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._get_recent_actions: store read failed: %s", e)
             return []
 
     def _compute_success_rate(self) -> float:
@@ -4842,7 +4848,8 @@ class Omega:
                 return 0.5
             successful = sum(1 for n in nodes if n.utility > 0.6)
             return successful / len(nodes)
-        except Exception:
+        except Exception as e:
+            logger.warning("Omega._compute_success_rate: success-rate read failed: %s", e)
             return 0.5
 
     def _get_failed_trajectory(self) -> dict:
@@ -4851,6 +4858,6 @@ class Omega:
             failures = self.failure_log.get_failures(limit=5)
             if failures:
                 return failures[0]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Omega._get_failed_trajectory: failure_log read failed: %s", e)
         return {"trajectory": [], "state": {}}
