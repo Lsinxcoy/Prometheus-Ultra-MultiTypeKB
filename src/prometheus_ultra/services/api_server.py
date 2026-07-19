@@ -248,12 +248,72 @@ class UltraAPIServer:
             ctype = "text/css" if safe.endswith(".css") else "application/javascript"
             return FileResponse(path, media_type=ctype)
 
+        @app.get("/api/v1/monitor/detail")
+        def monitor_detail():
+            """最细粒度监控快照: 单机制级 invoke_count/effect/error/status +
+            沉默机制 + 路由接管 + 动态层 + 突触修剪 + 系统指标 + 管道统计.
+            """
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            nx = getattr(self.omega, "nexus", None)
+            if not nx:
+                raise HTTPException(status_code=503, detail="Nexus not initialized")
+            with nx._lock:
+                mechs = {}
+                for name, e in nx._mechanisms.items():
+                    mechs[name] = {
+                        "category": e.get("category"),
+                        "status": e.get("status"),
+                        "is_dynamic": e.get("is_dynamic", False),
+                        "invoke_count": e.get("invoke_count", 0),
+                        "error_count": e.get("error_count", 0),
+                        "effect": round(e.get("effect", 0.0), 4) if e.get("effect") else None,
+                        "last_invoked": e.get("last_invoked"),
+                    }
+                snap = nx.get_monitor_snapshot()
+            # 系统指标(实时资源, 用 psutil; SystemMonitor 是历史指标统计, 正交)
+            sys_metrics = {}
+            try:
+                import psutil
+                proc = psutil.Process()
+                sys_metrics = {
+                    "cpu_percent": psutil.cpu_percent(interval=0.1),
+                    "memory_percent": psutil.virtual_memory().percent,
+                    "memory_available_mb": round(psutil.virtual_memory().available / 1024 / 1024, 1),
+                    "memory_used_mb": round(psutil.virtual_memory().used / 1024 / 1024, 1),
+                    "disk_percent": psutil.disk_usage("/").percent,
+                    "process_memory_mb": round(proc.memory_info().rss / 1024 / 1024, 1),
+                    "thread_count": proc.num_threads(),
+                }
+            except Exception as e:
+                sys_metrics = {"error": str(e)[:100]}
+            # SystemMonitor 历史指标统计(正交, 附在 system.stats)
+            sysmon = getattr(self.omega, "monitor", None)
+            if sysmon is not None and hasattr(sysmon, "get_stats"):
+                try:
+                    sys_metrics["monitor_stats"] = sysmon.get_stats()
+                except Exception:
+                    pass
+
+            pipes = {}
+            for pn, pv in nx._pipelines.items():
+                pipes[pn] = {"runs": pv.get("runs", 0), "failures": pv.get("failures", 0),
+                             "last_run": pv.get("last_run")}
+            return {
+                "snapshot": snap,
+                "mechanisms": mechs,
+                "system": sys_metrics,
+                "pipelines": pipes,
+                "total_invocations": sum(nx._invoke_count.values()),
+                "generated_at": time.time(),
+            }
+
         @app.get("/api/v1/status")
         def status():
             if not self.omega:
                 raise HTTPException(status_code=503, detail="Omega not initialized")
             s = self.omega.status()
-            # Nexus 神经中枢统合状态(真实消费率, 非旧6载体漏算)
+
             nx = getattr(self.omega, "nexus", None)
             nexus_stats = nx.get_stats() if nx else {}
             nexus_consumption = nx.get_consumption() if nx else {}
