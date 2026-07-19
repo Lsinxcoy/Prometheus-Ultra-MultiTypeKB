@@ -86,7 +86,10 @@ def attempt_fix(step: str, bug_detail: str):
 
 
 def send_feishu(rep: dict):
-    """详细飞书文本 -> stdout (cron deliver:feishu 转发)."""
+    """详细飞书文本 -> 真实飞书 API (tenant_access_token + im/v1/messages).
+    凭据从本地 feishu_secret.json 读取 (gitignore 保护, 不进版本库).
+    """
+    # 1. 构造文本
     L = [f"📊 Ultra 运行监控 {rep['time']}", f"判定: {rep['verdict']}"]
     for s in rep["steps"]:
         L.append(f"• {s['step']}: {'✅' if s['ok'] else '❌'} ({s.get('duration_s','-')}s) {s['detail'][:160]}")
@@ -96,7 +99,55 @@ def send_feishu(rep: dict):
             L.append(f"  - {b['step']}: {'已修' if b['fixed'] else '未修(待人工)'} {b['detail'][:160]}")
     if rep["metrics"]:
         L.append(f"\n📈 Metrics: {rep['metrics']}")
-    print("\n".join(L))
+    text = "\n".join(L)
+    print(text)  # 兜底: stdout
+
+    # 2. 读凭据
+    secret_path = pathlib.Path(REPO) / "feishu_secret.json"
+    if not secret_path.exists():
+        print("[WARN] feishu_secret.json 不存在, 跳过飞书发送")
+        return False
+    cfg = json.loads(secret_path.read_text(encoding="utf-8"))
+    app_id, app_secret, chat_id = cfg["app_id"], cfg["app_secret"], cfg["chat_id"]
+
+    # 3. 获取 tenant_access_token
+    try:
+        tok_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(tok_req, timeout=15) as r:
+            tok = json.loads(r.read().decode())
+        if tok.get("code") != 0:
+            print(f"[ERR] 飞书 token 失败: {tok}")
+            return False
+        token = tok["tenant_access_token"]
+    except Exception as e:
+        print(f"[ERR] 飞书 token 异常: {e}")
+        return False
+
+    # 4. 发送消息
+    try:
+        msg_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            data=json.dumps({
+                "receive_id": chat_id,
+                "msg_type": "text",
+                "content": json.dumps({"text": text}),
+            }).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(msg_req, timeout=15) as r:
+            res = json.loads(r.read().decode())
+        if res.get("code") == 0:
+            print(f"[OK] 飞书发送成功 message_id={res.get('data', {}).get('message_id')}")
+            return True
+        else:
+            print(f"[ERR] 飞书发送失败: {res}")
+            return False
+    except Exception as e:
+        print(f"[ERR] 飞书发送异常: {e}")
+        return False
 
 
 # ---------- 1. 健康 ----------
