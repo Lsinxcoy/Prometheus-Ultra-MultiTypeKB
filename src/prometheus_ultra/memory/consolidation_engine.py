@@ -36,6 +36,7 @@ class ConsolidationResult:
     promoted_count: int = 0
     conflicts_resolved: int = 0
     groups: list[dict] = field(default_factory=list)
+    kept: list[dict] = field(default_factory=list)
     duration_ms: float = 0.0
 
 
@@ -99,10 +100,15 @@ class ConsolidationEngine:
         before_count = len(conflicts)
         conflicts = [m for m in conflicts if m["importance"] >= self.min_importance]
         result.pruned_count = before_count - len(conflicts)
-        
-        # 清空缓冲区
-        self._buffer = []
-        
+        result.promoted_count = len(conflicts)
+
+        # 保留整合结果: 整合后的去重/剪枝记忆集必须留存, 否则"合并/清理"两阶段
+        # 形同虚设(记忆被静默丢弃)。显式传入 memories 时把整合集存入 result.kept
+        # 供调用方持久化; 默认(内部缓冲区)路径写回 self._buffer 而非整体清空(数据丢失)。
+        result.kept = conflicts
+        if memories is None:
+            self._buffer = conflicts
+
         result.duration_ms = (time.time() - start) * 1000
         self._history.append(result)
         return result
@@ -116,18 +122,9 @@ class ConsolidationEngine:
             "pruned": result.pruned_count,
             "promoted": result.promoted_count,
             "conflicts_resolved": result.conflicts_resolved,
+            "kept": len(result.kept),
             "duration_ms": result.duration_ms,
         }
-        result.pruned_count = before_count - len(conflicts)
-        result.promoted_count = len(conflicts)
-        
-        # 清空缓冲
-        if not memories:
-            self._buffer = []
-        
-        result.duration_ms = (time.time() - start) * 1000
-        self._history.append(result)
-        return result
     
     def _group_by_similarity(self, items: list[dict]) -> list[list[dict]]:
         """基于关键词重叠度分组."""

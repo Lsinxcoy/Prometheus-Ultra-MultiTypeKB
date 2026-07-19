@@ -4455,14 +4455,20 @@ class Omega:
             # 根因分类: 测试残留 / 孤儿注册(源机制残留) / 合理休眠 / 触发路径缺失(真bug)
             silent = []
             silent_by_category = {"test_residue": [], "orphan_registry": [], "dormant_ok": [], "trigger_missing": []}
-            def _classify_silent(label, name):
+            def _classify_silent(label, name, meta=None):
                 silent.append(f"{label}:{name}")
                 low = name.lower()
-                # 测试残留
-                if "test" in low or "tmp" in low or low.endswith("_p") or low.startswith("p_") or low.startswith("c1_") or low.startswith("c2_"):
+                meta = meta or {}
+                draft = (meta.get("data") or {}).get("draft_code") if isinstance(meta.get("data"), dict) else None
+                status = meta.get("status")
+                invoke = meta.get("invoke_count", 0) or 0
+                # 测试残留: 名字含 test/tmp, 或 draft 是占位符(x/y), 或 pending/disabled 从未调用
+                if ("test" in low or "tmp" in low or low.endswith("_p") or low.startswith(("p_", "c1_", "c2_", "bad_", "z_"))
+                        or draft in ("x", "y", "")
+                        or (status in ("pending", "disabled") and invoke == 0)):
                     silent_by_category["test_residue"].append(f"{label}:{name}")
                 # 孤儿注册: learn_*/scan_* 等源机制残留 (learn管道直连scanner, 不查注册表)
-                elif label == "registry" and (low.startswith("learn_") or low.startswith("scan_") or low.startswith("fetch_")):
+                elif label == "registry" and (low.startswith(("learn_", "scan_", "fetch_"))):
                     silent_by_category["orphan_registry"].append(f"{label}:{name}")
                 # 合理休眠: 探索性基因/候选/待定产物 (设计上不一定被消费)
                 elif label in ("registry", "skill", "gene") and any(k in low for k in ("explore", "pending", "speculative", "candidate", "semantic_evo", "evo_g")):
@@ -4474,7 +4480,7 @@ class Omega:
                     silent_by_category["dormant_ok"].append(f"{label}:{name}")
             for name, m in mechs.items():
                 if isinstance(m, dict) and m.get("consumed_at") is None and not m.get("emit_accepted"):
-                    _classify_silent("registry", name)
+                    _classify_silent("registry", name, m)
             for name, s in skills.items():
                 if isinstance(s, dict) and s.get("consumed_at") is None:
                     _classify_silent("skill", name)
