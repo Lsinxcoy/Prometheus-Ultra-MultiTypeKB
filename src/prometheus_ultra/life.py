@@ -756,7 +756,7 @@ class Omega:
         self.horma_hierarchical = HORMAHierarchicalMemory()
         self.rl_navigator = RLNavigator()
         # self.consolidation_engine already initialized above
-        self.memory_context_clash = MemoryContextClashDetector()
+        # NOTE: memory_context_clash 是 ContextClashDetector 的别名, 已作为 self.context_clash 实例化(行582), 此处冗余删除
         self.forbidden_pattern_detector = ForbiddenPatternDetector()
         self.external_notebook = ExternalNotebook()
 
@@ -1657,6 +1657,26 @@ class Omega:
         # OutputGuardrail: check output safety
         if unique:
             self.output_guardrail.check(unique[0].content)
+            # BlockerEscalation: L1/L2 两级阻断升级检查(对返回节点做深度安全评估)
+            for h in unique[:5]:
+                try:
+                    node_dict = {"content": h.content, "utility": getattr(h, "score", 0.5),
+                                 "id": getattr(h, "node_id", ""), "surprise": getattr(h, "surprise", 0.0)}
+                    blk = self.blocker_escalation.evaluate(node_dict)
+                    if blk is not None and getattr(blk, "passed", True) is False:
+                        logger.info("recall: blocker L2 escalated+blocked node %s", node_dict.get("id"))
+                except Exception as e:
+                    logger.warning("recall: blocker_escalation failed: %s", str(e)[:60])
+            # FuzzTester: 每10次recall对输出安全门跑注入测试套件(验证抗注入)
+            self._fuzz_tick = getattr(self, "_fuzz_tick", 0) + 1
+            if self._fuzz_tick % 10 == 0:
+                try:
+                    fuzz_results = self.fuzz_tester.run_injection_suite(self.output_guardrail.check)
+                    crashes = sum(1 for r in fuzz_results if not r.get("success"))
+                    if crashes:
+                        logger.warning("recall: fuzz_tester found %d guardrail injection crashes", crashes)
+                except Exception as e:
+                    logger.warning("recall: fuzz_tester failed: %s", str(e)[:60])
 
         # Gravity: rank results by gravitational pull
         for h in unique[:5]:
@@ -2246,17 +2266,23 @@ class Omega:
         走 A-B 并行原则(不强制覆盖): 注入的是候选基因维度, 由后续 evolve()
         的适应度评估决定去留.
         """
+        item_id = f"t3_{entry.get('name', '')}"
+        self.attribution_scoring.create_work_item(item_id, "mechanism_activate", priority=5)
         data = entry.get("data", {})
         specs = data.get("gene_specs") or {}
-        # T3 提取的机制可能在 data 里带 derivative gene_specs (mechanism_extractor 产出)
+
         if not specs and data.get("executable") is not None:
             specs = getattr(data["executable"], "gene_specs", {}) or {}
         if specs:
             try:
                 added = self.evolution_engine.inject_gene_specs(specs)
+                self.attribution_scoring.complete_work_item(item_id)
                 logger.info("Omega: T3 %s injected %d gene specs into evolution engine", entry["name"], added)
             except Exception as e:
+                self.attribution_scoring.fail_work_item(item_id, str(e)[:60])
                 logger.warning("Omega: T3 consume failed: %s", e)
+        else:
+            self.attribution_scoring.complete_work_item(item_id)
 
     def _consume_t4(self, entry: dict) -> None:
         """T4(论文编译)激活后: 经 host.emit_capability 导出机制给宿主 agent.
@@ -2264,20 +2290,24 @@ class Omega:
         这是"建议+宿主确认"语义(对齐 P6 不自动直替): 把 target_location + draft
         推给宿主, 宿主据此生成 tool/prompt/检索策略, 而非 Ultra 直接改写宿主代码.
         """
+        item_id = f"t4_{entry.get('name', '')}"
+        self.attribution_scoring.create_work_item(item_id, "mechanism_emit", priority=5)
         data = entry.get("data", {})
         spec = {
             "name": entry["name"],
             "category": "compiled",
-            "target_location": data.get("target_location", {}),
+
             "draft_code": data.get("draft_code", ""),
             "claim": data.get("paper", ""),
             "activated_at": entry.get("activated_at"),
         }
         try:
             ok = self.host.emit_capability(spec)
+            self.attribution_scoring.complete_work_item(item_id)
             logger.info("Omega: T4 %s emitted to host (accepted=%s)", entry["name"], ok)
             return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
         except Exception as e:
+            self.attribution_scoring.fail_work_item(item_id, str(e)[:60])
             logger.warning("Omega: T4 consume (emit) failed: %s", e)
             return False
 
@@ -2969,6 +2999,21 @@ class Omega:
                 new_nodes.append(node_id)
                 # 【P0修复】注册到LearnFeedbackTracker
                 self.learn_feedback.register(node_id, source=source, query=query)
+                # 【Phase1】T3/T4 轨道真调用机制提取/编译(接回进化引擎/宿主)
+                try:
+                    node = self.store.get_node(node_id)
+                    if ntype == NodeType.PROJECT and node is not None:
+                        ext = self.mechanism_extractor.extract_from_node(node)
+                        if ext is not None:
+                            self._consume_t3({"name": ext.name, "data": {"gene_specs": ext.contract}})
+                            logger.info("Omega: T3 extracted mechanism %s from %s", ext.name, getattr(node, "url", ""))
+                    elif ntype == NodeType.PAPER and node is not None:
+                        comp = self.mechanism_compiler.compile_from_node(node)
+                        if comp is not None:
+                            self._consume_t4({"name": comp.name, "data": {"target_location": comp.target_location, "draft_code": comp.draft_code, "paper": getattr(node, "url", "")}})
+                            logger.info("Omega: T4 compiled mechanism %s from %s", comp.name, getattr(node, "url", ""))
+                except Exception as e:
+                    logger.warning("learn: T3/T4 mechanism extract/compile failed: %s", str(e)[:80])
 
         # Step 4: CuriosityQueue (带 None 安全检查)
         if self.curiosity_queue is not None:
@@ -3187,6 +3232,18 @@ class Omega:
                     }
                     logger.info("learn: rumination %s relearned=%d mappings=%d skills=%d",
                                 due["mode"], rres.relearned, rres.mappings_applied, rres.skills_promoted)
+                    # PlaybookInheritance: 反刍产出的可复用配方注册为 playbook(温故知新继承)
+                    if rres.skills_promoted:
+                        try:
+                            from prometheus_ultra.evolution.playbook_inheritance import Playbook
+                            pb = Playbook(playbook_id=f"pb_{due['mode']}_{int(time.time())}",
+                                          name=f"rumination_{due['mode']}",
+                                          description=f"relearned {rres.skills_promoted} skills via {due['mode']}",
+                                          tags=["rumination", due["mode"]])
+                            self.playbook_inheritance.register_playbook(pb)
+                            logger.info("learn: registered playbook from rumination %s", due["mode"])
+                        except Exception as e:
+                            logger.warning("learn: playbook_inheritance register failed: %s", str(e)[:50])
             except Exception as e:
                 logger.warning("learn: rumination failed: %s", e)
 

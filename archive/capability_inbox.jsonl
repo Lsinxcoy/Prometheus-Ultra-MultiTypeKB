@@ -59,3 +59,4 @@
 {"event": "received", "name": "paper_2401_9", "category": "compiled", "target_location": {"module": "prometheus_ultra.mechanisms.registry", "filepath": "E:\\Prometheus-Ultra-MultiTypeKB\\src\\prometheus_ultra\\mechanisms\\registry.py", "lineno": 35, "symbol": "MechanismRegistry", "confidence": 1.0, "verified": true, "rationale": "BGPD L3 模块prometheus_ultra.mechanisms.registry内匹配", "level": 3}, "draft_code": "L1_BEHAVIOR: 核心机制执行\nL2_MODULE: mechanisms\nL3_MECHANISM: X机制 - 论文提出了一种名为X的机制以解决当前任务或增强系统能力。 - 接口契约(input: 任务输入数据/上下文, output: X处理后的目标结果, 依赖: 论文指定的实验环境与基础模型)。\n\n*(注：由于输入论文内容仅包含占位符 \"We propose X.\"，以上输出为基于该占位符的标准化结构提取。若提供具体论文内容，将输出精确的机制细节。)*", "claim": "2401.9", "activated_at": 1784414193.1585653}
 {"event": "received", "name": "m1"}
 {"event": "received", "name": "m1"}
+{"event": "received", "name": "paper_x", "category": "compiled", "draft_code": "x", "claim": "y", "activated_at": null}
