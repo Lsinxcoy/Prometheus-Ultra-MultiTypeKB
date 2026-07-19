@@ -62,8 +62,16 @@ fuzz_tester
 - 合理结论：232 活跃机制绝大多数有真实实现（B 系列论文机制本就为复现论文算法而写）；真实 MOCK 若存在需逐文件精读，不能用脚本 guess
 
 ### ③ 真实短板（确定）
-- **18 死代码**：3 个 B 系列真死代码（causal_explainer=LOCA / reasoning_alignment=CARA / camp_assembler=CAMP 实例化零调用）+ 其余内部状态/None 占位
-- **MechanismRegistry 空壳**：231 真机制不走 registry.register()，registry 仅 7 条零碎（架构设计选择：硬编码调用范式 vs 注册表消费范式未打通，非 bug）
+- **死代码机制（实例化但零 `self.x.method()` 调用）**：attribution_scoring(归因进化评分)/playbook_inheritance(剧本继承)/blocker_escalation(两级阻断升级)/mechanism_extractor(T3 GitHub机制提取)/mechanism_compiler(T4 论文编译)/memory_context_clash(记忆上下文冲突)/fuzz_tester(模糊测试) —— 这些是 B 系列论文机制，**修复方式是接入主流程让其真运行，绝非删除**
+- **MechanismRegistry 空壳**：232 真机制不走 registry.register()，registry 仅 7 条零碎（架构设计选择：硬编码调用范式 vs 注册表消费范式未打通，非 bug）
+
+### ③补 死代码修复的正确含义（2026-07-19 纠错）
+- **错误做法**：把零调用的论文机制直接从 `__init__` 删除（破坏性，丢失 20 天开发成果）
+- **正确做法**：
+  1. 读机制类的核心方法，确认其论文算法实现是否完整
+  2. 在主流程（七管道/四轨/learn/evolve）找到合适的调用点，接入 `self.x.method()` 让其真参与运行
+  3. 若机制实现本身不完整（STUB），先补实现再接入
+  4. 删除仅适用于：明确的 None 占位行 / 内部状态变量误报，绝不删论文机制本身
 
 ### ④ 本论结论 vs 此前误判对照
 | 此前误判 | 真实（本论） |
