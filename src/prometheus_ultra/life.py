@@ -572,10 +572,15 @@ class Omega:
         # Nexus: 神经系统统一中枢(统辖机制层+7管道+两层记忆+效果路由+修剪)
         from prometheus_ultra.cns.nexus import Nexus
         self.nexus = Nexus(path="archive/nexus.json", store=self.store)
+        # 注册表范式收敛: 让 InstinctsRegistry / SkillRegistry 旁路记账进 Nexus 统一调用图
+        # (零延迟保留: 仅 mark_invoked 计数, 不转发; 效果路由/消费统计覆盖全机制)
+        if hasattr(self, "instincts"):
+            self.instincts.nexus = self.nexus
+        if hasattr(self, "skill_registry"):
+            self.skill_registry.nexus = self.nexus
         self.x_adapter = XMemoryAdapter()
         self.y_adapter = YBankAdapter()
 
-        # ===== Monitor + Services (2) =====
         self.monitor = SystemMonitor()
         self.server = OmegaServer(omega=self)
 

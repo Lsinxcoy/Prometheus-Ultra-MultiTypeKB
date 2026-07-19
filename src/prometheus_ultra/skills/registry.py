@@ -40,7 +40,8 @@ class SkillRegistry:
         self._skill_map: dict[str, dict] = {}
         self._versions: dict[str, int] = {}
         self._invoke_history: list[dict] = []
-    
+        self.nexus = None  # 反向引用: Nexus 统一调用图(旁路记账)
+
     def register(self, skill=None, name: str = "", version: str = "",
                  tags: list[str] = None, description: str = "") -> dict:
         """注册技能.
@@ -155,8 +156,10 @@ class SkillRegistry:
         
         skill["status"] = "active"
         skill["consumed_at"] = __import__("time").time()  # 方案Y: 技能激活=被宿主消费, 记时间戳供 B1 消费率观测
+        if self.nexus is not None:
+            self.nexus.mark_invoked(name)
         return True
-    
+
     def deactivate(self, name: str) -> bool:
         """停用技能.
         
@@ -175,7 +178,7 @@ class SkillRegistry:
     
     def record_invoke(self, name: str, result: dict | None = None):
         """记录调用.
-        
+
         Args:
             name: 技能名称
             result: 调用结果
@@ -184,14 +187,17 @@ class SkillRegistry:
         if skill:
             skill["invoke_count"] += 1
             skill["last_invoked"] = time.time()
-        
+        if self.nexus is not None:
+            self.nexus.mark_invoked(name)
+
         self._invoke_history.append({
             "name": name,
             "timestamp": time.time(),
             "result": result,
         })
-    
+
     def get_stats(self) -> dict:
+
         """获取统计."""
         active = len([s for s in self._skills if s["status"] == "active"])
         inactive = len([s for s in self._skills if s["status"] == "inactive"])

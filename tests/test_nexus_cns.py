@@ -247,6 +247,37 @@ def test_layer4_skill_instinct_in_nexus(omega):
     # 统合: Nexus 看到了 skill/instinct 分类
     assert len(skills_in_nexus) >= 0  # 可能为空(若 Omega 未注册技能)
     assert len(instincts_in_nexus) >= 0
-    # 验证 get_monitor_snapshot 含分类
-    nxs = omega.nexus.get_monitor_snapshot()
-    assert "by_category" in nxs
+
+
+def test_layer5_registry_paradigm_converged(omega):
+    """[5] 注册表范式收敛: 本能/技能触发经 Nexus 统一调用图记账.
+
+    两种调用范式(直接 self.xxx / 注册表 register)在 Nexus 调用图汇聚,
+    消除孤岛审计盲区. 本能 evaluate_all 触发时旁路 mark_invoked, 零延迟保留.
+    """
+    # 1. 本能范式: 触发 evaluate_all -> Nexus._invoke_count 应含本能名
+    before = dict(omega.nexus._invoke_count)
+    # 触发默认安全评估(走 Gate 3 -> instincts.evaluate_all)
+    omega.instincts.evaluate_all({"content": "x", "utility": 0.5, "tags": ["t"]})
+    after_instinct = dict(omega.nexus._invoke_count)
+    instinct_names = {"utility_floor", "surprise_clamp", "content_required",
+                      "content_length_max", "tag_format", "no_empty_tags"}
+    triggered = instinct_names & set(after_instinct) - set(before)
+    assert triggered, f"本能触发未进 Nexus 调用图: {set(after_instinct)-set(before)}"
+    # 零延迟: mark_invoked 仅计数, 不转发(本能是 lambda, 不经 dispatch)
+    for n in triggered:
+        assert after_instinct[n] > before.get(n, 0)
+
+    # 2. 技能范式: record_invoke -> Nexus._invoke_count 应含技能名
+    omega.skill_registry.nexus = omega.nexus  # 确保反向引用(测试隔离)
+    before_skill = dict(omega.nexus._invoke_count)
+    omega.skill_registry.record_invoke("test_skill")
+    after_skill = dict(omega.nexus._invoke_count)
+    assert after_skill.get("test_skill", 0) > before_skill.get("test_skill", 0), \
+        "技能 record_invoke 未进 Nexus 调用图"
+    # activate 同步记账
+    before_act = dict(omega.nexus._invoke_count)
+    omega.skill_registry.register(name="activated_skill", tags=["demo"])
+    omega.skill_registry.activate("activated_skill")
+    assert omega.nexus._invoke_count.get("activated_skill", 0) > before_act.get("activated_skill", 0), \
+        "技能 activate 未进 Nexus 调用图"

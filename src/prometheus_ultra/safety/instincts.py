@@ -15,6 +15,7 @@ class InstinctsRegistry:
         self._instincts: list[dict] = []
         self._trigger_counts: dict[str, int] = {}
         self._recent_triggers: list[dict] = []
+        self.nexus = None  # 反向引用: Nexus 统一调用图(旁路记账, 零延迟保留)
 
     def register(self, name: str, check_fn, action: str = "warn"):
         self._instincts.append({"name": name, "check": check_fn, "action": action})
@@ -24,6 +25,9 @@ class InstinctsRegistry:
         for inst in self._instincts:
             try:
                 passed = inst["check"](context)
+                # 旁路记账进 Nexus 统一调用图(零延迟: 仅计数, 不转发)
+                if self.nexus is not None:
+                    self.nexus.mark_invoked(inst["name"])
                 if not passed:
                     self._trigger_counts[inst["name"]] = self._trigger_counts.get(inst["name"], 0) + 1
                     self._recent_triggers.append({"name": inst["name"], "action": inst["action"]})

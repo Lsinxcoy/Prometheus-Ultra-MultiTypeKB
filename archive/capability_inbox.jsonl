@@ -60,3 +60,7 @@
 {"event": "received", "name": "m1"}
 {"event": "received", "name": "m1"}
 {"event": "received", "name": "paper_x", "category": "compiled", "draft_code": "x", "claim": "y", "activated_at": null}
+{"event": "received", "name": "t4_real", "category": "compiled", "target_location": {}, "draft_code": "from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\nclass t4_real(BaseMechanism):\n    name = 't4_real'\n    category = 'compiled'\n    def run(self, context=None):\n        return {'t4': True}\n", "claim": "x", "activated_at": 0.0}
+{"event": "received", "name": "t4_real", "category": "compiled", "target_location": {}, "draft_code": "from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\nclass t4_real(BaseMechanism):\n    name = 't4_real'\n    category = 'compiled'\n    def run(self, context=None):\n        return {'t4': True}\n", "claim": "x", "activated_at": 0.0}
+{"event": "received", "name": "paper_x", "category": "compiled", "target_location": {}, "draft_code": "x", "claim": "y", "activated_at": null}
+{"event": "received", "name": "audit_t4", "category": "compiled", "target_location": {}, "draft_code": "from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\nclass audit_t4(BaseMechanism):\n    name = 'audit_t4'\n    category = 'compiled'\n    def run(self, context=None):\n        return {'t4': True}\n", "claim": "x", "activated_at": 0}
