@@ -244,7 +244,9 @@ class CerebralCortex:
 
             # New handlers for remaining 5 pipes — track fitness delta/score for fuse logic
             elif event_type == "reflect_completed":
-                score = data.get("composite_score", 0.5) or 0.5
+                raw_score = data.get("composite_score", 0.5)
+                # 类型边界修复(cycle-41, 同 cycle-30): 合法 0.0 是最差反思分, 绝不能被 `or 0.5` 误掩为 0.5
+                score = float(raw_score) if raw_score is not None else 0.5
                 drift = len(data.get("drift_alerts", [])) if isinstance(data.get("drift_alerts"), (list, tuple)) else (data.get("drift_alerts", 0) or 0)
                 # Drift count > 3 means reflect quality is degrading
                 outcome = max(0.0, min(1.0, 1.0 - drift / 10.0))
@@ -264,7 +266,9 @@ class CerebralCortex:
                 self._record_outcome("dream", patterns, outcome)
 
             elif event_type == "remember_completed":
-                utility = data.get("utility", 0.5) or 0.5
+                raw_utility = data.get("utility", 0.5)
+                # 类型边界修复(cycle-41, 同 cycle-30): 合法 0.0 记忆效用最差, 绝不能被 `or 0.5` 误掩
+                utility = float(raw_utility) if raw_utility is not None else 0.5
                 self._record_outcome("remember", utility, utility - 0.3)
 
             elif event_type == "maintain_completed":
