@@ -109,19 +109,66 @@ def audit():
     # G. 第二层: 统一调度 — 机制被 NexusProxy 包裹, 透明且记账
     from prometheus_ultra.cns.nexus import NexusProxy
     non_pipe = [a for a, e in o.nexus._mechanisms.items() if e.get("category") != "pipeline"]
-    proxied = sum(1 for a in non_pipe if isinstance(getattr(o, a, None), NexusProxy))
-    # 透明性: 代理机制方法调用仍正常返回
+    # 只有"机制实例属性"(基本盘/动态)应被代理; skill/instinct 分类项非 self.x 实例, 不代理
+    proxyable = [a for a in non_pipe
+                 if o.nexus._mechanisms[a].get("category") not in ("skill", "instinct")]
+    proxied = sum(1 for a in proxyable if isinstance(getattr(o, a, None), NexusProxy))
     fg = o.five_gates
     fg_ok = fg is not None and (hasattr(fg, "get_stats") or hasattr(fg, "evaluate"))
     before_g = o.nexus._invoke_count.get("five_gates", 0)
     _ = fg.get_stats() if hasattr(fg, "get_stats") else None
     after_g = o.nexus._invoke_count.get("five_gates", 0)
     results["G_layer2_unified_dispatch"] = (
-        proxied >= len(non_pipe) - 3 and fg_ok and after_g > before_g,
-        f"proxied={proxied}/{len(non_pipe)} transparent={fg_ok} fg_invoke={before_g}->{after_g}"
+        proxied >= len(proxyable) - 3 and fg_ok and after_g > before_g,
+        f"proxied={proxied}/{len(proxyable)} transparent={fg_ok} fg_invoke={before_g}->{after_g}"
     )
-    if not (proxied >= len(non_pipe) - 3 and fg_ok and after_g > before_g):
+    if not (proxied >= len(proxyable) - 3 and fg_ok and after_g > before_g):
         fails.append("G")
+
+    # H. T4 真实神经发生: _consume_t4 经沙箱 compile_mechanism + mount_dynamic
+    draft = (
+        "from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n"
+        "class audit_t4(BaseMechanism):\n"
+        "    name = 'audit_t4'\n"
+        "    category = 'compiled'\n"
+        "    def run(self, context=None):\n        return {'t4': True}\n"
+    )
+    before_dyn = len(o.nexus._dynamic)
+    o._consume_t4({"name": "audit_t4", "data": {"draft_code": draft, "paper": "x"}, "activated_at": 0})
+    mounted = "audit_t4" in o.nexus._dynamic
+    runnable = o.nexus._dynamic.get("audit_t4") is not None and o.nexus._dynamic["audit_t4"].run().get("t4") is True
+    results["H_t4_real_neurogenesis"] = (
+        mounted and runnable,
+        f"mounted={mounted} runnable={runnable} dynamic={before_dyn}->{len(o.nexus._dynamic)}"
+    )
+    if not (mounted and runnable):
+        fails.append("H")
+
+    # I. 监控统合: get_mechanism_consumption 委托 Nexus 真相源
+    snap = o.get_mechanism_consumption()
+    from_nexus = snap.get("by_carrier", {}).get("nexus", {}).get("total", 0) >= 234
+    has_silent = "silent_mechanisms" in snap
+    nxs = o.nexus.get_monitor_snapshot()
+    has_views = all(k in nxs for k in ("active_dynamic", "pruned_disabled", "route_overrides"))
+    results["I_monitor_unified_source"] = (
+        from_nexus and has_silent and has_views,
+        f"nexus_total={snap.get('by_carrier',{}).get('nexus',{}).get('total')} silent={has_silent} views={has_views}"
+    )
+    if not (from_nexus and has_silent and has_views):
+        fails.append("I")
+
+    # J. 注册表统合: Skill/Instinct 进 Nexus 分类
+    cats = o.nexus._by_category()
+    skills_ok = o.skill_registry is not None
+    instincts_ok = o.instincts is not None
+    # Nexus 能看到 skill/instinct 分类(启动时同步)
+    saw_skill_or_instinct = ("skill" in cats) or ("instinct" in cats)
+    results["J_registry_unified"] = (
+        skills_ok and instincts_ok and saw_skill_or_instinct,
+        f"skill_reg={skills_ok} instinct_reg={instincts_ok} cats_seen={saw_skill_or_instinct} cats={cats}"
+    )
+    if not (skills_ok and instincts_ok and saw_skill_or_instinct):
+        fails.append("J")
 
     o.close()
     return results, fails

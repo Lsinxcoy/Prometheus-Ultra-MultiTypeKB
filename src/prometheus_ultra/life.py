@@ -1026,14 +1026,38 @@ class Omega:
                 logger.debug("Nexus proxy wrap %s skipped: %s", attr, str(e)[:40])
         logger.info("Nexus: 统一调度代理包裹 %d 个机制", proxied)
 
+        # 第四层: 注册表统合 — SkillRegistry / InstinctsRegistry 同步进 Nexus 分类
+        # (Nexus 成为统一分类视图; 原注册表保留不破坏)
+        sk = getattr(self, "skill_registry", None)
+        if sk is not None:
+            for sk_name in getattr(sk, "_skill_map", {}):
+                try:
+                    self.nexus.register_mechanism(sk_name, category="skill")
+                except Exception:
+                    pass
+        ins = getattr(self, "instincts", None)
+        if ins is not None:
+            for inst_entry in getattr(ins, "_instincts", []):
+                in_name = inst_entry.get("name") if isinstance(inst_entry, dict) else None
+                if in_name:
+                    try:
+                        self.nexus.register_mechanism(in_name, category="instinct")
+                    except Exception:
+                        pass
+        logger.info("Nexus: 统合 Skill(%d)+Instinct(%d) 进分类视图",
+                     len(getattr(sk, "_skill_map", {})),
+                     len(getattr(ins, "_instincts", [])))
+
     # ============================================================
     # heartbeat — 自发周期循环，减少对 Hermes cron 的依赖
+    # ============================================================
     def _heartbeat_loop(self):
         """Daemon thread: 每 _heartbeat_interval 秒触发 learn，
         CNS 链自动完成 reflect → evolve → dream → maintain。"""
         while self._heartbeat_running:
             try:
                 time.sleep(self._heartbeat_interval)
+
                 if not self._heartbeat_running:
                     break
                 # 触发 learn，CNS 会链式触发剩余管道
@@ -2395,11 +2419,14 @@ class Omega:
                 try:
                     from prometheus_ultra.integration.mechanism_sandbox import MechanismSandbox
                     from prometheus_ultra.mechanisms import base_mechanism
-                    cls = MechanismSandbox().load(entry["name"], draft, base_mechanism)
+                    cls = MechanismSandbox().compile_mechanism(
+                        entry["name"], draft, base_mechanism)
                     if cls is not None:
                         inst = cls()
                         self.nexus.mount_dynamic(entry["name"], inst, category="compiled")
-                        logger.info("Omega: Nexus 动态挂载 T4 机制 %s", entry["name"])
+                        logger.info("Omega: Nexus 动态挂载 T4 机制 %s (神经发生完成)", entry["name"])
+                    else:
+                        logger.warning("Omega: T4 %s 沙箱编译返回 None, 未挂载", entry["name"])
                 except Exception as e:
                     logger.warning("Omega: T4 nexus mount failed: %s", str(e)[:50])
             return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
@@ -4532,144 +4559,52 @@ class Omega:
         return details, failed
 
     def get_mechanism_consumption(self) -> dict:
-        """方案Y: 聚合全 6 类机制载体的消费/激活状态。
+        """机制消费/健康统一视图 — 委托 Nexus 真相源 (第三层监控统合).
 
-        解决架构债: 机制散布在 6 类各自为政的载体里, B1 消费率原只看
-        mechanism_registry (1/6)。本聚合器统一读:
-        - mechanism_registry: consumed_at (D1 回流)
-        - skill_registry: consumed_at (activate 时记)
-        - evolution gene_specs (Speculative): consumed_at (promote 时记)
-        - handbook.entries: used_count>0 (被 locate_behavior 查中)
-        - instincts: _trigger_counts>0 (安全本能命中)
-        - harness_x primitives: last_used (get_best_config 选中)
-        返回 {total, consumed, rate, by_carrier}
+        Nexus 已统辖全部 236 基本盘 + 动态层 + 7管道, 其 get_monitor_snapshot()
+        是机制消费的唯一权威真相源. 本方法不再重复聚合 6 载体(机制层已在 Nexus),
+        仅基于 Nexus 数据做静默机制诊断分类(有价值的诊断逻辑保留).
+
+        返回 {total, consumed, rate, by_carrier, silent_mechanisms, silent_by_category}
         """
         try:
-            import time as _t
-            snap = {"total": 0, "consumed": 0, "by_carrier": {}}
-
-            # 1. mechanism_registry
-            reg = getattr(self, "mechanism_registry", None)
-            mechs = getattr(reg, "_mechanisms", {}) or {}
-            c1 = sum(1 for m in mechs.values()
-                      if isinstance(m, dict) and (m.get("consumed_at") is not None
-                                                      or m.get("emit_accepted") is True))
-            snap["total"] += len(mechs)
-            snap["consumed"] += c1
-            snap["by_carrier"]["mechanism_registry"] = {"total": len(mechs), "consumed": c1}
-
-            # 2. skill_registry
-            sk = getattr(self, "skill_registry", None)
-            skills = getattr(sk, "_skill_map", {}) or {} if sk else {}
-            c2 = sum(1 for s in skills.values()
-                      if isinstance(s, dict) and s.get("consumed_at") is not None)
-            snap["total"] += len(skills)
-            snap["consumed"] += c2
-            snap["by_carrier"]["skill_registry"] = {"total": len(skills), "consumed": c2}
-
-            # 3. evolution gene_specs (Speculative)
-            ev = getattr(self, "evolution_engine", None)
-            genes = getattr(ev, "_gene_specs", {}) or {} if ev else {}
-            c3 = sum(1 for g in genes.values()
-                      if isinstance(g, dict) and g.get("consumed_at") is not None)
-            snap["total"] += len(genes)
-            snap["consumed"] += c3
-            snap["by_carrier"]["speculative_genes"] = {"total": len(genes), "consumed": c3}
-
-            # 4. handbook entries (被查中)
-            try:
-                from prometheus_ultra.mechanisms.handbook import get_handbook
-                hb = get_handbook()  # 惰性单例(日志"Handbook built: 3170")
-            except Exception:
-                hb = None
-            entries = getattr(hb, "entries", []) or []
-            c4 = sum(1 for e in entries
-                      if getattr(e, "used_count", 0) > 0)
-            snap["total"] += len(entries)
-            snap["consumed"] += c4
-            snap["by_carrier"]["handbook"] = {"total": len(entries), "consumed": c4}
-
-            # 5. instincts (安全本能命中)
-            ins = getattr(self, "instincts", None)
-            trig = getattr(ins, "_trigger_counts", {}) or {} if ins else {}
-            c5 = sum(1 for v in trig.values() if v and v > 0)
-            snap["total"] += len(trig)
-            snap["consumed"] += c5
-            snap["by_carrier"]["instincts"] = {"total": len(trig), "consumed": c5}
-
-            # 6. harness primitives (被选中)
-            hx = getattr(self, "harness_x", None)
-            prims = getattr(hx, "_primitives", {}) or {} if hx else {}
-            c6 = sum(1 for p in prims.values()
-                      if hasattr(p, "last_used") and getattr(p, "last_used", 0) > 0)
-            snap["total"] += len(prims)
-            snap["consumed"] += c6
-            snap["by_carrier"]["harness_x"] = {"total": len(prims), "consumed": c6}
-
-            # 孤岛机制检测: 注册/定义但从未被消费的载体项 (沉默机制)
-            # 这些是"看似存在、实则从不触发"的虚假繁荣来源
-            # 根因分类: 测试残留 / 孤儿注册(源机制残留) / 合理休眠 / 触发路径缺失(真bug)
-            silent = []
-            silent_by_category = {"test_residue": [], "orphan_registry": [], "dormant_ok": [], "trigger_missing": []}
-            def _classify_silent(label, name, meta=None):
-                silent.append(f"{label}:{name}")
-                low = name.lower()
-                meta = meta or {}
-                draft = (meta.get("data") or {}).get("draft_code") if isinstance(meta.get("data"), dict) else None
-                status = meta.get("status")
-                invoke = meta.get("invoke_count", 0) or 0
-                # 测试残留: 名字含 test/tmp, 或 draft 是占位符(x/y), 或 pending/disabled 从未调用
-                if ("test" in low or "tmp" in low or low.endswith("_p") or low.startswith(("p_", "c1_", "c2_", "bad_", "z_"))
-                        or draft in ("x", "y", "")
-                        or (status in ("pending", "disabled") and invoke == 0)):
-                    silent_by_category["test_residue"].append(f"{label}:{name}")
-                # 孤儿注册: learn_*/scan_* 等源机制残留 (learn管道直连scanner, 不查注册表)
-                elif label == "registry" and (low.startswith(("learn_", "scan_", "fetch_"))):
-                    silent_by_category["orphan_registry"].append(f"{label}:{name}")
-                # 合理休眠: 探索性基因/候选/待定产物 (设计上不一定被消费)
-                elif label in ("registry", "skill", "gene") and any(k in low for k in ("explore", "pending", "speculative", "candidate", "semantic_evo", "evo_g")):
-                    silent_by_category["dormant_ok"].append(f"{label}:{name}")
-                # 触发路径缺失(真bug线索): 非测试/非孤儿/非探索性却从未消费
-                elif label in ("registry", "skill", "gene", "instinct", "harness"):
-                    silent_by_category["trigger_missing"].append(f"{label}:{name}")
-                else:
-                    silent_by_category["dormant_ok"].append(f"{label}:{name}")
-            for name, m in mechs.items():
-                if isinstance(m, dict) and m.get("consumed_at") is None and not m.get("emit_accepted"):
-                    _classify_silent("registry", name, m)
-            for name, s in skills.items():
-                if isinstance(s, dict) and s.get("consumed_at") is None:
-                    _classify_silent("skill", name)
-            for name, g in genes.items():
-                if isinstance(g, dict) and g.get("consumed_at") is None:
-                    _classify_silent("gene", name)
-            for i, (name, v) in enumerate(trig.items()):
-                if not v or v <= 0:
-                    _classify_silent("instinct", name)
-            for name, p in prims.items():
-                if hasattr(p, "last_used") and getattr(p, "last_used", 0) <= 0:
-                    _classify_silent("harness", name)
-            snap["silent_mechanisms"] = silent
-            snap["silent_count"] = len(silent)
-            snap["silent_by_category"] = silent_by_category
-
-            snap["rate"] = round(snap["consumed"] / max(1, snap["total"]), 4)
-
-            # 7. Nexus 统一中枢(权威真相源, 覆盖前6载体的漏算)
-            # 前6载体只统计 registry/skill/gene/handbook/instinct/harness,
-            # 漏掉 life.py 主流程的 236 机制 -> 消费率失真.
-            # Nexus 注册了全部基本盘 + 动态层, 其计数才是真实消费.
             nx = getattr(self, "nexus", None)
-            if nx is not None:
-                nc = nx.get_consumption()
-                snap["nexus_authority"] = nc
-                # 用 Nexus 真实数据覆盖(主流程机制才是系统真实机制面)
-                snap["total"] = nc["total"]
-                snap["consumed"] = nc["consumed"]
-                snap["rate"] = round(nc["rate"], 4)
-                snap["dynamic_count"] = nc["dynamic"]
-                snap["by_category"] = nc["by_category"]
-            return snap
+            if nx is None:
+                return {"total": 0, "consumed": 0, "rate": 0.0, "by_carrier": {}}
+            snap = nx.get_monitor_snapshot()
+            # 静默机制分类(silent_mechanisms 来自 Nexus 真相源, 更准)
+            silent = snap.get("silent_mechanisms", [])
+            silent_by_category = {
+                "test_residue": [], "orphan_registry": [],
+                "dormant_ok": [], "trigger_missing": [],
+            }
+            for name in silent:
+                low = name.lower()
+                if ("test" in low or "tmp" in low or low.endswith("_p")
+                        or low.startswith(("p_", "c1_", "c2_", "bad_", "z_"))):
+                    silent_by_category["test_residue"].append(name)
+                elif low.startswith(("learn_", "scan_", "fetch_")):
+                    silent_by_category["orphan_registry"].append(name)
+                elif any(k in low for k in ("explore", "pending", "speculative",
+                                            "candidate", "semantic_evo", "evo_g")):
+                    silent_by_category["dormant_ok"].append(name)
+                else:
+                    silent_by_category["trigger_missing"].append(name)
+            return {
+                "total": snap["mechanisms"],
+                "consumed": snap["consumed"],
+                "rate": round(snap["rate"], 4),
+                "dynamic_count": snap["dynamic"],
+                "by_category": snap.get("by_category", {}),
+                "route_overrides": snap.get("route_overrides", {}),
+                "active_dynamic": snap.get("active_dynamic", []),
+                "pruned_disabled": snap.get("pruned_disabled", []),
+                "silent_mechanisms": silent,
+                "silent_count": len(silent),
+                "silent_by_category": silent_by_category,
+                "by_carrier": {"nexus": {"total": snap["mechanisms"],
+                                         "consumed": snap["consumed"]}},
+            }
         except Exception as e:
             logger.debug("get_mechanism_consumption failed: %s", e)
             return {"total": 0, "consumed": 0, "rate": 0.0, "by_carrier": {}}

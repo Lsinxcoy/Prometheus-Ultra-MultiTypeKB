@@ -267,6 +267,41 @@ class Nexus:
             }
 
     # ==================================================================
+    # 监控统合 (第三层): 统一监控真相源 — 所有监控层只读此视图
+    # ==================================================================
+    def get_monitor_snapshot(self) -> dict:
+        """统一监控快照: 机制层 + 动态层 + 路由 + 突触修剪 + 静默机制.
+
+        所有监控层(maintain/heartbeat)只读此视图, 不再各自聚合机制状态.
+        SystemMonitor 的系统指标(CPU/内存)正交, 不在此(仅引用 store/健康).
+        """
+        with self._lock:
+            cons = self.get_consumption()
+            # 静默机制: 已注册但从未被调用(记账 0)的非管道机制
+            silent = [n for n, e in self._mechanisms.items()
+                      if e.get("category") != "pipeline"
+                      and e.get("invoke_count", 0) == 0
+                      and not e.get("is_dynamic", False)]
+            # 动态接管中: 动态层已激活且覆盖基本盘(name 在 route_override 值中)
+            active_dynamic = [d for d in self._dynamic
+                              if any(v == d for v in self._route_override.values())]
+            return {
+                "mechanisms": cons["total"],
+                "consumed": cons["consumed"],
+                "rate": cons["rate"],
+                "dynamic": cons["dynamic"],
+                "base": cons["base"],
+                "by_category": cons["by_category"],
+                "pipelines": len(self._pipelines),
+                "route_overrides": dict(self._route_override),
+                "active_dynamic": active_dynamic,
+                "pruned_disabled": [n for n, e in self._mechanisms.items()
+                                    if e.get("status") == "disabled"],
+                "silent_mechanisms": silent,
+                "total_invocations": sum(self._invoke_count.values()),
+            }
+
+    # ==================================================================
     # 持久化
     # ==================================================================
     def _persist(self) -> None:

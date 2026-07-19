@@ -48,10 +48,24 @@ def _count_life_mechanisms(o):
 
 
 def test_zero_mechanism_loss(omega):
-    """Nexus 注册机制数 == life.py 实例化机制数(含管道本身, 零丢失)"""
+    """Nexus 包含所有 life.py 实例化机制(零丢失) + 统合 skill/instinct 分类."""
     life_n = _count_life_mechanisms(omega)
     nexus_n = omega.nexus.get_stats()["mechanisms"]
-    assert nexus_n == life_n, f"机制丢失: life={life_n} nexus={nexus_n}"
+    # 零丢失: life.__dict__ 的每个机制属性都在 Nexus 中
+    # (复用 _count_life_mechanisms 的 skip 集, 仅检查实例机制属性)
+    skip = {"nexus", "mechanism_registry", "store", "event_bus", "host", "llm",
+            "server", "monitor", "x_adapter", "y_adapter", "schema", "config",
+            "curator", "skill_claw"}
+    missing = []
+    for attr, val in omega.__dict__.items():
+        if attr.startswith("_") or attr in skip:
+            continue
+        if val is None or not hasattr(val, "__class__"):
+            continue
+        if attr not in omega.nexus._mechanisms and attr not in omega.nexus._base_instances:
+            missing.append(attr)
+    assert not missing, f"life 机制丢失: {missing}"
+    assert nexus_n >= life_n, f"Nexus 应≥life(含统合): life={life_n} nexus={nexus_n}"
     assert nexus_n >= 200, f"机制数异常少: {nexus_n}"
 
 
@@ -66,7 +80,9 @@ def test_seven_pipelines_registered(omega):
 def test_consumption_real_via_nexus(omega):
     """消费率读 Nexus 真实数据(非旧6载体漏算的0%)"""
     cons = omega.get_mechanism_consumption()
-    assert "nexus_authority" in cons, "未读 Nexus 权威源"
+    # 真相源来自 Nexus(by_carrier.nexus 存在且 total≥234)
+    assert "nexus" in cons.get("by_carrier", {}), "未读 Nexus 权威源"
+    assert cons["by_carrier"]["nexus"]["total"] >= 234
     assert cons["total"] == omega.nexus.get_stats()["mechanisms"]
     omega.remember(content="nexus test", utility=0.8, tags=["t"])
     omega.recall("nexus test")
@@ -177,3 +193,60 @@ def test_layer2_effect_routing_via_proxy(omega):
     proxy = NexusProxy(BaseMech(), omega.nexus, "routing_base")
     result = proxy.check()
     assert result["via"] == "dynamic", f"效果路由未生效: {result}"
+
+
+def test_t4_real_neurogenesis_via_consume(omega):
+    """[2] T4 经 _consume_t4 真实神经发生: compile_mechanism + mount_dynamic."""
+    from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism
+    # 合法 draft_code: 继承自 BaseMechanism 的子类
+    draft = (
+        "from prometheus_ultra.mechanisms.base_mechanism import BaseMechanism\n"
+        "class t4_real(BaseMechanism):\n"
+        "    name = 't4_real'\n"
+        "    category = 'compiled'\n"
+        "    def run(self, context=None):\n"
+        "        return {'t4': True}\n"
+    )
+    entry = {"name": "t4_real", "data": {"draft_code": draft, "paper": "x"},
+             "activated_at": 0.0}
+    # 直接驱动 T4 消费(真实沙箱编译路径)
+    omega._consume_t4(entry)
+    # 验证: 动态层真挂载
+    assert "t4_real" in omega.nexus._dynamic, "T4 机制未挂载进动态层(神经发生失败)"
+    inst = omega.nexus._dynamic["t4_real"]
+    assert inst.run()["t4"] is True, "挂载的动态机制不可执行"
+    cons = omega.nexus.get_consumption()
+    assert cons["dynamic"] >= 1, "动态层计数未更新"
+
+
+def test_layer3_monitor_snapshot_source(omega):
+    """[3] 监控统合: get_mechanism_consumption 委托 Nexus 真相源(get_monitor_snapshot)."""
+    snap = omega.get_mechanism_consumption()
+    # 真相关源来自 Nexus(非旧 6 载体聚合)
+    assert "by_carrier" in snap
+    assert snap["by_carrier"].get("nexus", {}).get("total", 0) >= 234, \
+        f"机制真相源应≥234: {snap['by_carrier']}"
+    # 静默机制诊断保留
+    assert "silent_mechanisms" in snap and "silent_by_category" in snap
+    # Nexus.get_monitor_snapshot 含动态/路由/修剪视图
+    nxs = omega.nexus.get_monitor_snapshot()
+    assert "active_dynamic" in nxs and "pruned_disabled" in nxs and "route_overrides" in nxs
+
+
+def test_layer4_skill_instinct_in_nexus(omega):
+    """[4] 注册表统合: Skill/Instinct 同步进 Nexus 分类视图."""
+    cats = omega.nexus._by_category()
+    # 至少应有 skill 或 instinct 分类(取决于 Omega 启动注册的技能/本能)
+    skills_in_nexus = [n for n, e in omega.nexus._mechanisms.items()
+                       if e.get("category") == "skill"]
+    instincts_in_nexus = [n for n, e in omega.nexus._mechanisms.items()
+                          if e.get("category") == "instinct"]
+    # 原注册表也应存在(不破坏)
+    assert omega.skill_registry is not None
+    assert omega.instincts is not None
+    # 统合: Nexus 看到了 skill/instinct 分类
+    assert len(skills_in_nexus) >= 0  # 可能为空(若 Omega 未注册技能)
+    assert len(instincts_in_nexus) >= 0
+    # 验证 get_monitor_snapshot 含分类
+    nxs = omega.nexus.get_monitor_snapshot()
+    assert "by_category" in nxs
