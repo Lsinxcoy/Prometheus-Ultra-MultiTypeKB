@@ -167,7 +167,7 @@ def tick():
 
 
 if __name__ == "__main__":
-    print(f"[启动] Ultra 最细监控 每 {INTERVAL}s (API={API})")
+    print(f"[启动] Ultra 产出监控 每 {INTERVAL}s (API={API})")
     # 首轮立即跑
     tick()
     while True:
