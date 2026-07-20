@@ -38,6 +38,40 @@ TYPE_LABEL = {
 }
 
 
+def _detail_line(ptype: str, d: dict) -> str:
+    """从产出 detail 提取对人类有用的明细行."""
+    if ptype == "knowledge":
+        content = d.get("content", "")
+        # learn 产出的 detail 含 title/url, remember 产出含 content
+        title = d.get("title") or content
+        tags = ",".join(d.get("tags", [])[:4]) if d.get("tags") else ""
+        src = d.get("url", "")[:40] if d.get("url") else ""
+        extra = f" [{tags}]" if tags else ""
+        if src:
+            extra += f" <- {src}"
+        return f"{str(title)[:70]}{extra}"
+    if ptype == "mechanism":
+        name = d.get("name", "?")
+        paper = d.get("paper", "")
+        tgt = d.get("target_location", {})
+        mod = tgt.get("module", "") if isinstance(tgt, dict) else ""
+        accepted = d.get("accepted")
+        flag = "✓emit" if accepted else "✗"
+        return f"{name} {flag} {paper[-30:]} -> {mod}"
+    if ptype == "belief":
+        return (f"信念{d.get('beliefs_synthesized')} / 模式{d.get('patterns_found')} "
+                f"/ 连接{d.get('connections_discovered')}")
+    if ptype == "reflection":
+        return f"评分={d.get('score')} 等级={d.get('grade')} 漂移={d.get('drift')}"
+    if ptype == "evolution":
+        return (f"{d.get('result')} Δfit={round(d.get('delta',0),4)} "
+                f"({round(d.get('fitness_before',0),3)}→{round(d.get('fitness_after',0),3)}) "
+                f"best={d.get('best_strategy')}")
+    if ptype == "prune":
+        return f"修剪{d.get('pruned')}节点 / 过期规则{d.get('expired_rules')} / 余{d.get('node_count')}"
+    return ""
+
+
 def build_report(detail: dict, prods: dict) -> str:
     """产出视角报告: 这段时间系统产出了什么(而非机制健康)."""
     snap = detail.get("snapshot", {})
@@ -70,7 +104,9 @@ def build_report(detail: dict, prods: dict) -> str:
             L.append(f"  {TYPE_LABEL.get(t, t)}:")
             for p in grp[-8:]:
                 ts = datetime.datetime.fromtimestamp(p["ts"]).strftime("%H:%M")
-                L.append(f"    [{ts}] {p['summary'][:90]}")
+                d = p.get("detail", {})
+                line = _detail_line(t, d)
+                L.append(f"    [{ts}] {line}")
 
     # —— 管道运行(是否真的在跑) ——
     L.append("")

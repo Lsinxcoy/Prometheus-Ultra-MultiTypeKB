@@ -1102,6 +1102,19 @@ class Omega:
         """
         try:
             with self._production_lock:
+                # 去重: 避免同一产出被多路径重复记 (如 learn 调 remember 导致知识节点记2次)
+                key = None
+                if ptype == "knowledge":
+                    key = detail.get("node_id") if detail else None
+                if key is None:
+                    key = f"{ptype}:{summary}"
+                # 检查最近是否已记过相同 key (窗口: 最近 200 条内)
+                for p in reversed(self._productions[-200:]):
+                    if p["type"] == ptype and (
+                        (ptype == "knowledge" and p.get("detail", {}).get("node_id") == key)
+                        or (ptype != "knowledge" and p["summary"] == summary)
+                    ):
+                        return  # 重复, 跳过
                 self._productions.append({
                     "ts": time.time(),
                     "type": ptype,
@@ -3193,7 +3206,7 @@ class Omega:
                 self.learn_feedback.register(node_id, source=source, query=query)
                 self.record_production("knowledge", f"学习新知识 {getattr(r, 'title', '')[:50]}", {
                     "node_id": node_id, "source": source, "url": getattr(r, "url", ""),
-                    "tags": node_tags,
+                    "title": getattr(r, "title", ""), "tags": node_tags,
                 })
 
                 try:
