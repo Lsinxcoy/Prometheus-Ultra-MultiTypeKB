@@ -1130,6 +1130,13 @@ class Omega:
     def remember(self, content: str, utility: float = 0.5, tags: list[str] | None = None,
                  branch: str = "main", trust_level: str = "fact",
                  node_type: NodeType = NodeType.FACT, url: str = "") -> str:
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("remember", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["remember"]["runs"] += 1
+            self.nexus._pipelines["remember"]["last_run"] = time.time()
+        except Exception:
+            pass
         tags = tags or []
 
         surprise = max(0.3, utility * 0.6)
@@ -1521,10 +1528,18 @@ class Omega:
     def recall(self, query: str, limit: int = 10, branch: str = "main",
                prefer_chunk: bool = False, node_type=None, future_aware: bool = True) -> SearchResults:
         start = time.time()
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("recall", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["recall"]["runs"] += 1
+            self.nexus._pipelines["recall"]["last_run"] = time.time()
+        except Exception:
+            pass
         all_hits: list[SearchHit] = []
+
         recall_data = {}
         # P1-a (论文① Rethink Causal VL 借力): future-aware 检索
-        # 论文核心: 严格因果mask屏蔽未来位置, 对视觉token过死(未来帧含语义线索).
+
         # 映射到 ULTRA: recall 默认不应因"时间因果"屏蔽未来记忆(反刍/跨会话).
         # future_aware=True 时, created_at 晚于当前的节点(未来记忆)不降权反而微boost.
         _now = time.time()
@@ -2505,9 +2520,16 @@ class Omega:
     # ============================================================
     def evolve(self, context: str = "", branch: str = "main", confidence: float = 0.5) -> EvolutionOutcome:
         start = time.time()
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("evolve", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["evolve"]["runs"] += 1
+            self.nexus._pipelines["evolve"]["last_run"] = time.time()
+        except Exception:
+            pass
         # P0-b (论文⑤ Thought Leap Bridge 借力): 进化链完整性追踪
         # 论文核心: CoT 思维跳跃(专家省略中间步) -> 检测+补步.
-        # 映射到 evolve 11-stage: 若关键 stage 因 except:pass 静默跳过, 进化链不完整(leap).
+
         # 此处记录关键 stage 是否真执行, 末尾暴露 chain_complete(而非假装成功).
         chain_trace = {
             "brainstorm": False, "plan": False, "main_evolve": False,
@@ -3514,8 +3536,16 @@ class Omega:
     # reflect pipeline
     # ============================================================
     def reflect(self, context: str = "") -> dict:
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("reflect", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["reflect"]["runs"] += 1
+            self.nexus._pipelines["reflect"]["last_run"] = time.time()
+        except Exception:
+            pass
         # AdaptiveHarness: check harness state
         harness_state = self.adaptive_harness.get_state()
+
         reflect_diagnostics: Dict[str, Any] = {}
 
         # 链上下文：读取触发管的完整信号
@@ -3887,8 +3917,15 @@ class Omega:
     # dream pipeline
     # ============================================================
     def dream_cycle(self, branch: str = "main") -> DreamResult:
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("dream_cycle", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["dream_cycle"]["runs"] += 1
+            self.nexus._pipelines["dream_cycle"]["last_run"] = time.time()
+        except Exception:
+            pass
         nodes = self.store.get_branch_nodes(branch)
-        # Reset memories before re-registering to prevent unbounded growth
+
         self.dream._memories.clear()
         for node in nodes:
             self.dream.register_memory(node)
@@ -4085,6 +4122,13 @@ class Omega:
     # ============================================================
     def maintain(self) -> dict:
         start = time.time()
+        # 管道运行计数(监控可见性)
+        try:
+            self.nexus._pipelines.setdefault("maintain", {"runs": 0, "failures": 0, "last_run": None})
+            self.nexus._pipelines["maintain"]["runs"] += 1
+            self.nexus._pipelines["maintain"]["last_run"] = time.time()
+        except Exception:
+            pass
         maintain_data = {}
 
         # 链上下文：读取触发管的信号
