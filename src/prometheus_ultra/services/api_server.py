@@ -332,6 +332,19 @@ class UltraAPIServer:
                 "generated_at": time.time(),
             }
 
+        @app.get("/api/v1/issues")
+        def issues(since_minutes: float = 30):
+            """运行问题视角: 返回最近 N 分钟内系统真实产生的 BUG/异常/关键WARNING.
+
+            采集自 Omega._issues (由日志处理器 + 管道 except 填充).
+            """
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            issuer = getattr(self.omega, "_get_issues", None)
+            if issuer is None:
+                return {"since_minutes": since_minutes, "total": 0, "by_level": {}, "items": []}
+            return issuer(int(since_minutes))
+
         @app.get("/api/v1/status")
         def status():
             if not self.omega:

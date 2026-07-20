@@ -72,7 +72,7 @@ def _detail_line(ptype: str, d: dict) -> str:
     return ""
 
 
-def build_report(detail: dict, prods: dict) -> str:
+def build_report(detail: dict, prods: dict, issues: dict | None = None) -> str:
     """产出视角报告: 这段时间系统产出了什么(而非机制健康)."""
     snap = detail.get("snapshot", {})
     pipes = detail.get("pipelines", {})
@@ -126,6 +126,32 @@ def build_report(detail: dict, prods: dict) -> str:
         L.append("  (无系统指标)")
     L.append(f"  机制总数 {snap.get('mechanisms')} | 消费率 {round(snap.get('rate',0),3)} | "
              f"动态层 {snap.get('dynamic')}")
+
+    # —— 运行问题(这段时间真实产生的 BUG/异常/关键WARNING) ——
+    L.append("")
+    L.append("【运行问题】")
+    iss = issues.get("items", []) if issues else []
+    by_level = (issues or {}).get("by_level", {})
+    if not iss:
+        L.append("  ✅ 无 ERROR/关键WARNING — 系统运行健康")
+    else:
+        if by_level:
+            L.append(f"  汇总: error={by_level.get('error',0)} warning={by_level.get('warning',0)}")
+        # 按 (level, source, msg) 聚合, 避免刷屏
+        from collections import Counter
+        agg = Counter()
+        samples = {}
+        for it in iss:
+            key = (it.get("level"), it.get("source"), it.get("msg"))
+            agg[key] += 1
+            samples.setdefault(key, it)
+        for (level, source, msg), cnt in sorted(agg.items(), key=lambda kv: -kv[1])[:10]:
+            icon = "🔴" if level == "error" else "🟡"
+            ts = datetime.datetime.fromtimestamp(samples[(level, source, msg)]["ts"]).strftime("%H:%M")
+            rep = f"  {icon} [{ts}] {source}: {msg[:90]}"
+            if cnt > 1:
+                rep += f" (×{cnt})"
+            L.append(rep)
 
     return "\n".join(L)
 
@@ -190,7 +216,10 @@ def tick():
     prods = call("/api/v1/productions?since_minutes=30")
     if "_error" in prods:
         prods = {"total": 0, "by_type": {}, "items": [], "since_minutes": 30}
-    text = build_report(detail, prods)
+    issues = call("/api/v1/issues?since_minutes=30")
+    if "_error" in issues:
+        issues = {"total": 0, "by_level": {}, "items": [], "since_minutes": 30}
+    text = build_report(detail, prods, issues)
     send_feishu(text)
     # 落盘备查
     try:

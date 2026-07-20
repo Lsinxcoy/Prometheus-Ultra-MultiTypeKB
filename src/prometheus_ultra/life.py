@@ -587,6 +587,13 @@ class Omega:
         self._productions = []
         self._production_lock = threading.Lock()
 
+        # 运行问题收集器: 记录系统运行期间真实产生的 BUG/异常/关键WARNING,
+        # 供监控报告"运行问题"块. 下划线开头避免 Nexus 包裹.
+        self._issues = []
+        self._issue_lock = threading.Lock()
+        # 挂一个日志处理器, 捕 ERROR + 关键 WARNING (过滤噪音)
+        self._attach_issue_handler()
+
         self.monitor = SystemMonitor()
 
         self.server = OmegaServer(omega=self)
@@ -1126,6 +1133,62 @@ class Omega:
                     self._productions = self._productions[-5000:]
         except Exception:
             pass
+
+    def record_issue(self, level: str, source: str, msg: str, detail: dict | None = None):
+        """记录一条运行问题 (BUG/异常/关键WARNING), 供监控报告展示.
+
+        level: "error" | "warning"
+        source: 来源模块/管道, 如 "pipeline:learn" / "T4" / "safety"
+        """
+        try:
+            with self._issue_lock:
+                self._issues.append({
+                    "ts": time.time(),
+                    "level": level,
+                    "source": source,
+                    "msg": str(msg)[:300],
+                    "detail": detail or {},
+                })
+                if len(self._issues) > 2000:
+                    self._issues = self._issues[-2000:]
+        except Exception:
+            pass
+
+    def _get_issues(self, since_minutes: int = 30) -> dict:
+        cutoff = time.time() - since_minutes * 60
+        recent = [i for i in self._issues if i["ts"] >= cutoff]
+        by_level = {}
+        for i in recent:
+            by_level[i["level"]] = by_level.get(i["level"], 0) + 1
+        return {"total": len(recent), "by_level": by_level,
+                "since_minutes": since_minutes, "items": recent}
+
+    def _attach_issue_handler(self):
+        """挂日志处理器: 捕 ERROR + 关键 WARNING 转成 issue (过滤噪音)."""
+        import logging
+        NOISE = (
+            "owner_harm", "WAL LCRP rejected",
+            "batch_update_utilities received booleans",
+            "A2A delegate_task failed", "httpx", "urllib3",
+        )
+        class _IssueHandler(logging.Handler):
+            def emit(self, record):
+                if record.levelno < logging.WARNING:
+                    return
+                text = record.getMessage()
+                low = text.lower()
+                if any(n.lower() in low for n in NOISE):
+                    return
+                level = "error" if record.levelno >= logging.ERROR else "warning"
+                src = record.name.split(".")[-1] if record.name else "?"
+                try:
+                    self.record_issue(level, src, text)
+                except Exception:
+                    pass
+        h = _IssueHandler()
+        h.setLevel(logging.WARNING)
+        logging.getLogger("prometheus_ultra").addHandler(h)
+        return h
 
     def remember(self, content: str, utility: float = 0.5, tags: list[str] | None = None,
                  branch: str = "main", trust_level: str = "fact",
@@ -5077,8 +5140,8 @@ class Omega:
     def _collect_failure_paths(self) -> list[str]:
         """Collect failure paths for ReflectiveSampler."""
         try:
-            failures = self.failure_log.get_failures(limit=10)
-            return [f["path"] for f in failures if "path" in f]
+            failures = self.failure_log.get_recent_failures(10)
+            return [f.get("action", "") for f in failures if f.get("action")]
         except Exception as e:
             logger.warning("Omega._collect_failure_paths: failure_log read failed: %s", e)
             return []
@@ -5107,7 +5170,7 @@ class Omega:
     def _get_failed_trajectory(self) -> dict:
         """Get failed trajectory for L-ICL correction."""
         try:
-            failures = self.failure_log.get_failures(limit=5)
+            failures = self.failure_log.get_recent_failures(5)
             if failures:
                 return failures[0]
         except Exception as e:
