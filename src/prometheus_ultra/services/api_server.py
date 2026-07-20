@@ -308,6 +308,30 @@ class UltraAPIServer:
                 "generated_at": time.time(),
             }
 
+        @app.get("/api/v1/productions")
+        def productions(since_minutes: float = 30):
+            """产出视角: 返回最近 N 分钟内系统真实产出的东西.
+
+            类型: knowledge(知识节点) / mechanism(T4编译机制) /
+            belief(梦境信念) / reflection(反思结论) / evolution(进化) / prune(修剪)
+            """
+            if not self.omega:
+                raise HTTPException(status_code=503, detail="Omega not initialized")
+            prods = getattr(self.omega, "_productions", [])
+            cutoff = time.time() - since_minutes * 60
+            recent = [p for p in prods if p.get("ts", 0) >= cutoff]
+            by_type = {}
+            for p in recent:
+                by_type.setdefault(p["type"], 0)
+                by_type[p["type"]] += 1
+            return {
+                "since_minutes": since_minutes,
+                "total": len(recent),
+                "by_type": by_type,
+                "items": recent,
+                "generated_at": time.time(),
+            }
+
         @app.get("/api/v1/status")
         def status():
             if not self.omega:

@@ -32,84 +32,64 @@ def call(path, timeout=30):
         return {"_error": str(e)[:200]}
 
 
-def build_report(detail: dict) -> str:
-    """把最细粒度 detail 压成飞书可读文本(单机制级)."""
+TYPE_LABEL = {
+    "knowledge": "📚 知识", "mechanism": "🧬 机制", "belief": "💡 信念",
+    "reflection": "🪞 反思", "evolution": "🧠 进化", "prune": "🗑️ 修剪",
+}
+
+
+def build_report(detail: dict, prods: dict) -> str:
+    """产出视角报告: 这段时间系统产出了什么(而非机制健康)."""
     snap = detail.get("snapshot", {})
-    mechs = detail.get("mechanisms", {})
     pipes = detail.get("pipelines", {})
     sys_m = detail.get("system", {})
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    L = [f"🔬 Ultra 最细监控 {now}", ""]
+    L = [f"🔬 Ultra 产出监控 {now}", ""]
 
-    # —— 系统资源 ——
-    L.append("【系统资源】")
-    if sys_m:
-        for k in ("cpu_percent", "memory_percent", "memory_used_mb", "memory_available_mb",
-                  "disk_percent", "process_memory_mb", "thread_count"):
-            if k in sys_m:
-                L.append(f"  {k}: {sys_m[k]}")
+    # —— 总体产出 ——
+    by_type = prods.get("by_type", {})
+    L.append("【本周期产出】")
+    if not by_type:
+        L.append("  (无新产出 — 系统静默运行)")
     else:
-        L.append("  (无系统指标)")
+        for t, c in sorted(by_type.items(), key=lambda kv: -kv[1]):
+            L.append(f"  {TYPE_LABEL.get(t, t)}: {c} 项")
+    L.append(f"  产出总计: {prods.get('total', 0)} 项 (近 {prods.get('since_minutes')}min)")
 
-    # —— 总体 ——
-    L.append("")
-    L.append("【总体】")
-    L.append(f"  机制总数: {snap.get('mechanisms')}  已消费: {snap.get('consumed')}  "
-             f"消费率: {round(snap.get('rate',0),3)}")
-    L.append(f"  总调用: {detail.get('total_invocations')}  动态层: {snap.get('dynamic')}  "
-             f"基本盘: {snap.get('base')}")
-    L.append(f"  路由接管: {len(snap.get('route_overrides',{}))}  "
-             f"突触修剪(禁用): {len(snap.get('pruned_disabled',[]))}")
+    # —— 具体产出清单(每条) ——
+    items = prods.get("items", [])
+    if items:
+        L.append("")
+        L.append("【产出明细】")
+        # 按类型分组, 每组最多 8 条
+        for t in ("knowledge", "mechanism", "belief", "reflection", "evolution", "prune"):
+            grp = [p for p in items if p["type"] == t]
+            if not grp:
+                continue
+            L.append(f"  {TYPE_LABEL.get(t, t)}:")
+            for p in grp[-8:]:
+                ts = datetime.datetime.fromtimestamp(p["ts"]).strftime("%H:%M")
+                L.append(f"    [{ts}] {p['summary'][:90]}")
 
-    # —— 管道健康 ——
+    # —— 管道运行(是否真的在跑) ——
     L.append("")
-    L.append("【7管道健康】")
+    L.append("【管道运行】")
     for pn, pv in sorted(pipes.items()):
         runs, fails = pv.get("runs", 0), pv.get("failures", 0)
-        rate = (runs - fails) / runs if runs else 1.0
-        flag = "✅" if (fails == 0 and runs > 0) or runs == 0 else "⚠️"
-        L.append(f"  {flag} {pn}: runs={runs} fail={fails} 成功率={round(rate,3)}")
+        flag = "✅" if (fails == 0) else "⚠️"
+        L.append(f"  {flag} {pn}: runs={runs} fail={fails}")
 
-    # —— 单机制级: 高频 Top10 ——
+    # —— 系统资源(一行) ——
     L.append("")
-    L.append("【机制调用 Top10】")
-    top = sorted(mechs.items(), key=lambda kv: kv[1].get("invoke_count", 0), reverse=True)[:10]
-    for n, m in top:
-        L.append(f"  {n}: inv={m['invoke_count']} err={m['error_count']} "
-                 f"eff={m['effect']} cat={m['category']} st={m['status']}")
-
-    # —— 错误机制 ——
-    errs = [(n, m) for n, m in mechs.items() if m.get("error_count", 0) > 0]
-    if errs:
-        L.append("")
-        L.append(f"【⚠️ 错误机制 {len(errs)}】")
-        for n, m in sorted(errs, key=lambda kv: kv[1]["error_count"], reverse=True)[:10]:
-            L.append(f"  {n}: err={m['error_count']} inv={m['invoke_count']} st={m['status']}")
-
-    # —— 沉默机制(已注册从未调用) ——
-    silent = snap.get("silent_mechanisms", [])
-    if silent:
-        L.append("")
-        L.append(f"【😴 沉默机制 {len(silent)}】 (注册但 invoke=0)")
-        L.append("  " + ", ".join(silent[:20]))
-        if len(silent) > 20:
-            L.append(f"  ... 另 {len(silent)-20} 个")
-
-    # —— 路由接管中 ——
-    ro = snap.get("route_overrides", {})
-    if ro:
-        L.append("")
-        L.append(f"【🔀 路由接管 {len(ro)}】")
-        for base, dyn in ro.items():
-            L.append(f"  {base} -> {dyn}")
-
-    # —— 动态层 ——
-    ad = snap.get("active_dynamic", [])
-    if ad:
-        L.append("")
-        L.append(f"【🌱 动态接管中 {len(ad)}】")
-        L.append("  " + ", ".join(ad[:15]))
+    L.append("【系统】")
+    if sys_m:
+        L.append(f"  CPU {sys_m.get('cpu_percent')}% | 内存 {sys_m.get('memory_percent')}% | "
+                 f"进程 {sys_m.get('process_memory_mb')}MB | 线程 {sys_m.get('thread_count')}")
+    else:
+        L.append("  (无系统指标)")
+    L.append(f"  机制总数 {snap.get('mechanisms')} | 消费率 {round(snap.get('rate',0),3)} | "
+             f"动态层 {snap.get('dynamic')}")
 
     return "\n".join(L)
 
@@ -164,19 +144,23 @@ def send_feishu(text: str) -> bool:
 
 
 def tick():
-    """一轮监控: 拉最细数据 + 发飞书."""
+    """一轮监控: 拉产出视角数据 + 发飞书."""
     detail = call("/api/v1/monitor/detail")
     if "_error" in detail:
         msg = f"⚠️ Ultra 监控取数失败: {detail['_error']}\nAPI={API}\n请检查系统是否在跑"
         print(msg)
         send_feishu(msg)
         return False
-    text = build_report(detail)
+    prods = call("/api/v1/productions?since_minutes=30")
+    if "_error" in prods:
+        prods = {"total": 0, "by_type": {}, "items": [], "since_minutes": 30}
+    text = build_report(detail, prods)
     send_feishu(text)
     # 落盘备查
     try:
         out = pathlib.Path(REPO) / "monitor_fine_latest.json"
-        out.write_text(json.dumps(detail, ensure_ascii=False, indent=1), encoding="utf-8")
+        out.write_text(json.dumps({"detail": detail, "productions": prods},
+                                   ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
     return True

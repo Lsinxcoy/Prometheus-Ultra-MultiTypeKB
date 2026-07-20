@@ -581,7 +581,14 @@ class Omega:
         self.x_adapter = XMemoryAdapter()
         self.y_adapter = YBankAdapter()
 
+        # 产出账本: 统一记录系统真实产出(知识/机制/信念/反思/修剪),
+        # 供最细粒度监控"这段时间产出了什么"视角使用.
+        # 下划线开头: 避免被 Nexus 统合当成机制包裹成 NexusProxy.
+        self._productions = []
+        self._production_lock = threading.Lock()
+
         self.monitor = SystemMonitor()
+
         self.server = OmegaServer(omega=self)
 
         # ===== New modules (15) =====
@@ -1088,13 +1095,34 @@ class Omega:
     # ============================================================
     # remember pipeline (11 stages)
     # ============================================================
+    def record_production(self, ptype: str, summary: str, detail: dict | None = None):
+        """产出账本: 记录系统真实产出(知识/机制/信念/反思/修剪).
+
+        ptype: knowledge | mechanism | belief | reflection | evolution | prune
+        """
+        try:
+            with self._production_lock:
+                self._productions.append({
+                    "ts": time.time(),
+                    "type": ptype,
+                    "summary": summary,
+                    "detail": detail or {},
+                })
+                # 防无限增长: 保留最近 5000 条
+                if len(self._productions) > 5000:
+                    self._productions = self._productions[-5000:]
+        except Exception:
+            pass
+
     def remember(self, content: str, utility: float = 0.5, tags: list[str] | None = None,
                  branch: str = "main", trust_level: str = "fact",
                  node_type: NodeType = NodeType.FACT, url: str = "") -> str:
         tags = tags or []
+
         surprise = max(0.3, utility * 0.6)
-        
+
         # Handle non-string content
+
         if not isinstance(content, str):
             content = str(content)
 
@@ -1460,7 +1488,11 @@ class Omega:
 
         logger.info("Remembered: %s (confidence: %s)", node.id[:8], conf_level)
         self.utility_tracker.register(node.id, initial_utility=utility)
-        # Telemetry: 存储原始返回值
+        self.record_production("knowledge", f"记住知识节点 {node.id[:8]}", {
+            "node_id": node.id, "utility": utility, "tags": tags,
+            "content": (content[:120] if isinstance(content, str) else str(content)[:120]),
+        })
+
         self._telemetry["remember"] = node.id
 
         # 写管道结果
@@ -2418,7 +2450,12 @@ class Omega:
             ok = self.host.emit_capability(spec)
             self.attribution_scoring.complete_work_item(item_id)
             logger.info("Omega: T4 %s emitted to host (accepted=%s)", entry["name"], ok)
-            # Nexus 神经发生: T4 编译产物经沙箱加载 -> 动态层挂载(不碰基本盘)
+            self.record_production("mechanism", f"T4 论文机制编译 {entry['name']} (emit host={ok})", {
+                "name": entry["name"], "accepted": ok,
+                "paper": data.get("paper", "")[:80],
+                "target_location": data.get("target_location", {}),
+            })
+
             draft = data.get("draft_code", "")
             if draft and ok is not False:
                 try:
@@ -2439,9 +2476,11 @@ class Omega:
                             logger.info("Omega: Nexus 动态挂载 T4 机制 %s (神经发生完成, 作候选不自动接管)",
                                         entry["name"])
 
+                    else:
                         logger.warning("Omega: T4 %s 沙箱编译返回 None, 未挂载", entry["name"])
                 except Exception as e:
                     logger.warning("Omega: T4 nexus mount failed: %s", str(e)[:50])
+
             return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
         except Exception as e:
             self.attribution_scoring.fail_work_item(item_id, str(e)[:60])
@@ -3005,6 +3044,14 @@ class Omega:
             "delta": round(delta, 4),
         })
 
+        self.record_production("evolution", f"进化: {evolve_result.result} Δfitness={round(delta,4)} best={best_strategy}", {
+            "result": str(evolve_result.result),
+            "fitness_before": round(fitness_before, 4),
+            "fitness_after": round(fitness_after, 4),
+            "delta": round(delta, 4),
+            "best_strategy": best_strategy,
+        })
+
         return evolve_result
 
     # ============================================================
@@ -3144,7 +3191,11 @@ class Omega:
                 new_nodes.append(node_id)
                 # 【P0修复】注册到LearnFeedbackTracker
                 self.learn_feedback.register(node_id, source=source, query=query)
-                # 【Phase1】T3/T4 轨道真调用机制提取/编译(接回进化引擎/宿主)
+                self.record_production("knowledge", f"学习新知识 {getattr(r, 'title', '')[:50]}", {
+                    "node_id": node_id, "source": source, "url": getattr(r, "url", ""),
+                    "tags": node_tags,
+                })
+
                 try:
                     node = self.store.read_node(node_id)
                     if ntype == NodeType.PROJECT and node is not None:
@@ -3677,8 +3728,11 @@ class Omega:
 
         # Failure log deep operations
         logger.info("reflect: score=%.4f, grade=%s, drift=%d", fv.composite_score, fv.grade, len(drift))
+        self.record_production("reflection", f"反思: 评分={fv.composite_score:.3f} 等级={fv.grade} 漂移={len(drift)}", {
+            "score": fv.composite_score, "grade": fv.grade, "drift": len(drift),
+        })
         reflect_diagnostics["failure_rates"] = self.failure_log.get_action_failure_rates()
-        reflect_diagnostics["failure_errors"] = self.failure_log.get_common_errors()
+
         reflect_diagnostics["failure_recent"] = self.failure_log.get_recent_failures()
         reflect_diagnostics["failure_severity"] = self.failure_log.get_severity_distribution()
 
@@ -3994,8 +4048,14 @@ class Omega:
         setattr(dream_result, 'dream_data', dream_data)
 
         self.event_bus.publish({"type": "dream_completed", "patterns": dream_result.patterns_found, "beliefs": dream_result.beliefs_synthesized, "connections": dream_result.connections_discovered})
+        self.record_production("belief", f"梦境合成: {dream_result.beliefs_synthesized} 信念 / {dream_result.patterns_found} 模式 / {dream_result.connections_discovered} 连接", {
+            "patterns_found": dream_result.patterns_found,
+            "beliefs_synthesized": dream_result.beliefs_synthesized,
+            "connections_discovered": dream_result.connections_discovered,
+        })
         # Telemetry: 存储原始返回值
         self._telemetry["dream"] = dream_result
+
 
         # 写管道结果
         self.signal_fusion.set_pipe_result("dream", {
@@ -4132,6 +4192,8 @@ class Omega:
 
         # MiMo: Three-Layer Compression
         nodes = self.store.get_active_nodes(limit=20)
+        pruned_count = 0
+
         for n in nodes:
             self.forgetting.compute_retention_compat(n.id, age=1.0)
             self.gravity.add_node(n.id, mass=n.utility)
@@ -4141,11 +4203,11 @@ class Omega:
             for action in actions:
                 if action.action == "prune":
                     self.store.delete_node(n.id)
-            # MemoryDepth: track access
+                    pruned_count += 1
             self.memory_depth.record_access(n.id)
 
         # MiMo: Heartbeat 4-cycle
-        self.heartbeat_4cycle.run_cycles()
+
 
         # MiMo: Capability ceiling check
         can_add, ceiling_reason = self.capability_ceiling.should_add_agents()
@@ -4186,7 +4248,13 @@ class Omega:
         # 信息茧房
         report_text = "Maintain completed: %d nodes, %d edges, %d expired rules" % (
             self.store.get_node_count(), self.store.get_edge_count(), len(expired))
-        compressed = self.three_layer_compression.compress(report_text)
+        if pruned_count > 0:
+            self.record_production("prune", f"维护修剪 {pruned_count} 个节点", {
+                "pruned": pruned_count,
+                "expired_rules": len(expired),
+                "node_count": self.store.get_node_count(),
+            })
+
         self.zscore.detect()
         self.drift_detector.observe_behavioral(0.5)
         drift_alerts = self.constraint_drift.detect()
