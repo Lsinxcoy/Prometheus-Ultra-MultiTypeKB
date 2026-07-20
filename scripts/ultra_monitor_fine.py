@@ -224,7 +224,7 @@ def tick():
     # 落盘备查
     try:
         out = pathlib.Path(REPO) / "monitor_fine_latest.json"
-        out.write_text(json.dumps({"detail": detail, "productions": prods},
+        out.write_text(json.dumps({"detail": detail, "productions": prods, "issues": issues},
                                    ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass

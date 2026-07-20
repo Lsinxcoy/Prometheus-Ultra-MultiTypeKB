@@ -148,8 +148,30 @@ class UltraAPIServer:
         self.port = port
         self.db_path = db_path
         self.app = FastAPI(title="Prometheus Ultra API", version="1.0.0")
+        # 全局异常捕获: 任何端点未处理异常 -> 记运行问题(供监控报告"运行问题"块)
+        from fastapi import Request
+        from fastapi.exceptions import RequestValidationError
+        from fastapi.responses import JSONResponse
+
+        @self.app.exception_handler(Exception)
+        async def _catch_all(req: Request, exc: Exception):
+            src = f"api:{req.method} {req.url.path}"
+            msg = f"{type(exc).__name__}: {str(exc)[:120]}"
+            try:
+                if self.omega and hasattr(self.omega, "record_issue"):
+                    self.omega.record_issue("error", src, msg)
+            except Exception:
+                pass
+            return JSONResponse(status_code=500, content={"error": msg, "source": src})
+
+        @self.app.exception_handler(RequestValidationError)
+        async def _catch_validation(req: Request, exc: RequestValidationError):
+            # 输入校验错误不进运行问题(属调用方问题, 非系统 BUG)
+            return JSONResponse(status_code=422, content={"detail": "validation error", "errors": str(exc)[:200]})
+
         # CORS for dashboard
         from fastapi.middleware.cors import CORSMiddleware
+
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -157,6 +179,7 @@ class UltraAPIServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
         self.omega = None
         self._server_thread: Optional[threading.Thread] = None
         self._setup_routes()

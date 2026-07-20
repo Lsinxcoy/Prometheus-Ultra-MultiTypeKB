@@ -2569,8 +2569,10 @@ class Omega:
 
                     else:
                         logger.warning("Omega: T4 %s 沙箱编译返回 None, 未挂载", entry["name"])
+                        self.record_issue("warning", "T4", f"{entry['name']} 沙箱编译返回 None, 未挂载")
                 except Exception as e:
                     logger.warning("Omega: T4 nexus mount failed: %s", str(e)[:50])
+                    self.record_issue("error", "T4", f"nexus mount failed: {str(e)[:80]}")
 
             return ok  # 返回宿主接受状态, 供熔断精准化 [P1 C3]
         except Exception as e:
@@ -3308,6 +3310,7 @@ class Omega:
                             logger.info("Omega: T4 compiled mechanism %s from %s", comp.name, getattr(node, "url", ""))
                 except Exception as e:
                     logger.warning("learn: T3/T4 mechanism extract/compile failed: %s", str(e)[:80])
+                    self.record_issue("error", "learn", f"T3/T4 mechanism extract/compile failed: {str(e)[:80]}")
 
         # Step 4: CuriosityQueue (带 None 安全检查)
         if self.curiosity_queue is not None:
